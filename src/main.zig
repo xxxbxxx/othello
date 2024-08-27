@@ -213,3 +213,46 @@ fn drawHelper(b: othello.Board, nextcol: othello.Color, pos: Vec2, size: f32) vo
         }
     }
 }
+
+// tests
+
+fn playGame(seed: u32, alloc: std.mem.Allocator, engine: othello.Engine) othello.Score {
+    var prng = std.Random.DefaultPrng.init(seed); //std.testing.random_seed);
+    const random = prng.random();
+
+    var board: othello.Board = othello.init_board;
+    var nextcol: othello.Color = .black;
+
+    var game_over = false;
+    while (!game_over) {
+        const pos = othello.computeBestMove(if (nextcol == .black) .random else engine, board, nextcol, alloc, random);
+        board = othello.playAt(board, pos, nextcol) catch break;
+        nextcol = nextcol.next();
+
+        const can_play = othello.computeValidSquares(board, nextcol) != 0;
+        if (!can_play) {
+            nextcol = nextcol.next();
+            if (othello.computeValidSquares(board, nextcol) == 0)
+                game_over = true;
+        }
+    }
+    return othello.computeScore(board);
+}
+
+test "random" {
+    const score = playGame(4321, std.testing.allocator, .random);
+    try std.testing.expectEqual(@as(u32, 32), score.whites);
+    try std.testing.expectEqual(@as(u32, 32), score.blacks);
+}
+
+test "greedy" {
+    const score = playGame(4321, std.testing.allocator, .greedy);
+    try std.testing.expectEqual(@as(u32, 31), score.whites);
+    try std.testing.expectEqual(@as(u32, 33), score.blacks);
+}
+
+test "multi steps" {
+    const score = playGame(4321, std.testing.allocator, .five_steps);
+    try std.testing.expectEqual(@as(u32, 57), score.whites);
+    try std.testing.expectEqual(@as(u32, 4), score.blacks);
+}

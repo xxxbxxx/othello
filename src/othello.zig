@@ -68,6 +68,7 @@ pub const init_board: Board = init: {
 
 const dirsteps: [8 * 8][8][]const u64 = blk: {
     @setEvalBranchQuota(10000);
+    // nb: testé avec u8 ibit pltuot que u64 mask.  -> 1.22x plus lent
 
     const compass_dirs: []const Coord = &.{
         .{ 1, 0 }, .{ -1, 0 }, .{ 0, 1 },  .{ 0, -1 },
@@ -96,24 +97,22 @@ const dirsteps: [8 * 8][8][]const u64 = blk: {
 pub fn computeValidSquares(b: Board, col: Color) u64 {
     assert(col != .empty);
     var valid: u64 = 0;
-    for (0..8) |y| {
-        for (0..8) |x| {
-            if (b.get(x, y) != .empty) continue;
-
-            const ok: bool = loop: for (&dirsteps[y * 8 + x]) |steps| {
-                var has_oppo = false;
-                for (steps) |bit| {
-                    if ((b.occupied & bit) == 0) continue :loop;
-                    const sq: Color = if ((b.color & bit) == 0) .black else .white;
-                    if (sq == col and !has_oppo) continue :loop;
-                    if (sq == col and has_oppo) break :loop true;
-                    has_oppo = true;
-                }
-            } else false;
-
-            if (ok) {
-                valid |= bitmask(x, y);
+    for (&dirsteps, 0..) |dirs, index| {
+        const bit0: u64 = @as(u64, 1) << @intCast(index);
+        if ((b.occupied & bit0) != 0) continue;
+        const ok: bool = loop: for (&dirs) |steps| {
+            var has_oppo = false;
+            for (steps) |bit| {
+                if ((b.occupied & bit) == 0) continue :loop;
+                const sq: Color = if ((b.color & bit) == 0) .black else .white;
+                if (sq == col and !has_oppo) continue :loop;
+                if (sq == col and has_oppo) break :loop true;
+                has_oppo = true;
             }
+        } else false;
+
+        if (ok) {
+            valid |= bit0;
         }
     }
     return valid;
@@ -145,7 +144,8 @@ pub fn playAt(b: Board, p: Coord, col: Color) !Board {
     return b1;
 }
 
-pub fn computeScore(b: Board) struct { whites: u32, blacks: u32 } {
+pub const Score = struct { whites: u32, blacks: u32 };
+pub fn computeScore(b: Board) Score {
     var nbw: u32 = 0;
     var nbb: u32 = 0;
     var bit: u64 = 1;
@@ -260,6 +260,7 @@ fn computeStepBestMove(b: Board, col: Color, random: std.Random, ctx: *Context, 
                 break :score evaluation(after, col);
             };
             ctx.dico.put(after, expected) catch unreachable;
+
             if (best_score < expected or best == null) {
                 best = coord;
                 best_score = expected;

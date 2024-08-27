@@ -54,4 +54,15 @@ pub fn build(b: *std.Build) !void {
     run_step.dependOn(&run_cmd.step);
 
     b.installArtifact(exe);
+
+    const main_test = b.addTest(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .use_llvm = (optimize != .Debug),
+        .use_lld = (optimize != .Debug),
+    });
+    const test_cmd = b.addRunArtifact(main_test);
+    const test_step = b.step("test", "run tests");
+    test_step.dependOn(&test_cmd.step);
 }
