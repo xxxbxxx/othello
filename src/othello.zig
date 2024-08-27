@@ -140,6 +140,7 @@ pub fn playAt(b: Board, p: Coord, col: Color) !Board {
             if (sq == col) continue :loop;
             b1.setBitmask(bit, col);
         }
+        unreachable;
     }
     return b1;
 }
@@ -200,8 +201,9 @@ fn evaluation(b: Board, col: Color) i32 {
     const score = computeScore(b);
     const nb0: i64 = if (col == .white) score.whites else score.blacks;
     const nb1: i64 = if (col == .black) score.whites else score.blacks;
+    const nbempty: i32 = @intCast(64 - (score.whites + score.blacks));
     const delta: i32 = @intCast(nb0 - nb1);
-    return delta;
+    return delta + nbempty; // on considère que tous les vides sont à nous (pour éviter de chercher à maximiser la diff plutot que finir la partie)
 }
 
 fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: Coord, score: i32 } {
