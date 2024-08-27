@@ -274,10 +274,7 @@ fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: 
             const coord: Coord = .{ @intCast(x), @intCast(y) };
             const after = playAt(b, coord, col);
             const delta = evaluation(after, col);
-            if (best_score < delta or best == null) {
-                best = coord;
-                best_score = delta;
-            } else if (best_score == delta and random.boolean()) {
+            if (best == null or best_score < delta or (best_score == delta and random.boolean())) {
                 best = coord;
                 best_score = delta;
             }
@@ -301,25 +298,15 @@ fn computeStepBestMove(b: Board, col: Color, random: std.Random, ctx: *Context, 
 
             const expected: i32 = score: {
                 if (ctx.dico.get(after)) |v| break :score v;
-                switch (lookahead) {
-                    0 => {},
-                    1 => {
-                        if (computeGreedyMove(after, col.next(), random)) |res|
-                            break :score -res.score;
-                    },
-                    else => {
-                        if (computeStepBestMove(after, col.next(), random, ctx, lookahead - 1)) |res|
-                            break :score -res.score;
-                    },
+                if (lookahead > 0) {
+                    if (computeStepBestMove(after, col.next(), random, ctx, lookahead - 1)) |res|
+                        break :score -res.score;
                 }
                 break :score evaluation(after, col);
             };
             ctx.dico.put(after, expected) catch unreachable;
 
-            if (best_score < expected or best == null) {
-                best = coord;
-                best_score = expected;
-            } else if (best_score == expected and random.boolean()) {
+            if (best == null or best_score < expected or (best_score == expected and random.boolean())) {
                 best = coord;
                 best_score = expected;
             }
