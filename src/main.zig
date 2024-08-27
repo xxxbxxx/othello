@@ -23,6 +23,7 @@ pub fn main() anyerror!void {
 
     var board = init_board;
     var nextcol: Color = .white;
+    var showhelpers = true;
 
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
@@ -48,17 +49,14 @@ pub fn main() anyerror!void {
         rl.beginDrawing();
         defer rl.endDrawing();
 
-        rl.clearBackground(rl.Color.dark_brown);
+        rl.clearBackground(rl.Color.init(0, 33, 66, 255));
         drawBoard(board, main_board_pos, main_board_size);
-        drawHelper(board, nextcol, main_board_pos, main_board_size);
+        if (showhelpers)
+            drawHelper(board, nextcol, main_board_pos, main_board_size);
 
-        //            rl.drawCircle(200, 200, 100, rl.Color.red);
-        // rl.drawText("Congrats! You created your first window!", 190, 200, 20, rl.Color.light_gray);
-        //----------------------------------------------------------------------------------
-
-        if (gui.guiLabelButton(.{ .x = 10, .y = 10, .width = 100, .height = 100 }, "coucou") != 0) {
-            //   draw_grid = !draw_grid;
-        }
+        rl.drawText("Next: ", 700, 50, 30, rl.Color.light_gray);
+        drawPawn(.{ .x = 820, .y = 65 }, 20, nextcol);
+        _ = gui.guiCheckBox(.{ .x = 700, .y = 500, .width = 20, .height = 20 }, "show helpers", &showhelpers);
     }
 }
 
@@ -95,19 +93,23 @@ fn drawBoard(b: Board, pos: Vec2, size: f32) void {
 
         for (0..8) |y| {
             for (0..8) |x| {
-                const col = switch (b.get(x, y)) {
-                    .empty => continue,
-                    .white => rl.Color.beige,
-                    .black => rl.Color.dark_brown,
-                };
-
-                rl.drawCircleV(addmul(pos0, size / 8, .{ .x = @floatFromInt(x), .y = @floatFromInt(y) }), size / 20, col);
-                rl.drawCircleLinesV(addmul(pos0, size / 8, .{ .x = @floatFromInt(x), .y = @floatFromInt(y) }), size / 20, rl.Color.black);
+                drawPawn(addmul(pos0, size / 8, .{ .x = @floatFromInt(x), .y = @floatFromInt(y) }), size / 20, b.get(x, y));
             }
         }
     }
 
     rl.drawRectangleRoundedLinesEx(rect, 0.1, 7, 5.0, rl.Color.black);
+}
+
+fn drawPawn(pos: Vec2, radius: f32, col: Color) void {
+    const rgb = switch (col) {
+        .empty => return,
+        .white => rl.Color.beige,
+        .black => rl.Color.dark_brown,
+    };
+
+    rl.drawCircleV(pos, radius, rgb);
+    rl.drawCircleLinesV(pos, radius, rl.Color.black);
 }
 
 fn drawHelper(b: Board, nextcol: Color, pos: Vec2, size: f32) void {
