@@ -29,24 +29,29 @@ pub const Color = enum {
     }
 };
 pub const Board = struct {
-    occupied: u64,
-    color: u64,
+    white: u64,
+    black: u64,
 
     pub fn get(b: @This(), x: anytype, y: anytype) Color {
         const bit: u64 = bitmask(x, y);
-        if ((b.occupied & bit) == 0) return .empty;
-        return if ((b.color & bit) == 0) .black else .white;
+        if ((b.white & bit) != 0) return .white;
+        if ((b.black & bit) != 0) return .black;
+        return .empty;
     }
+
     pub fn setBitmask(b: *@This(), bit: u64, c: Color) void {
         switch (c) {
-            .empty => b.occupied &= ~bit,
-            .black => {
-                b.occupied |= bit;
-                b.color &= ~bit;
+            .empty => {
+                b.white &= ~bit;
+                b.black &= ~bit;
             },
             .white => {
-                b.occupied |= bit;
-                b.color |= bit;
+                b.white |= bit;
+                b.black &= ~bit;
+            },
+            .black => {
+                b.black |= bit;
+                b.white &= ~bit;
             },
         }
     }
@@ -58,7 +63,7 @@ pub const Board = struct {
 };
 
 pub const init_board: Board = init: {
-    var b: Board = .{ .color = 0, .occupied = 0 };
+    var b: Board = .{ .white = 0, .black = 0 };
     b.set(3, 3, .white);
     b.set(4, 4, .white);
     b.set(3, 4, .black);
@@ -96,18 +101,25 @@ const dirsteps: [8 * 8][8][]const u64 = blk: {
 
 pub fn computeValidSquares(b: Board, col: Color) u64 {
     assert(col != .empty);
+    const occupied = b.white | b.black;
+    const own = if (col == .white) b.white else b.black;
+    const opp = if (col == .white) b.black else b.white;
     var valid: u64 = 0;
+
     for (&dirsteps, 0..) |dirs, index| {
         const bit0: u64 = @as(u64, 1) << @intCast(index);
-        if ((b.occupied & bit0) != 0) continue;
+        if (occupied & bit0 != 0) continue;
         const ok: bool = loop: for (&dirs) |steps| {
             var has_oppo = false;
             for (steps) |bit| {
-                if ((b.occupied & bit) == 0) continue :loop;
-                const sq: Color = if ((b.color & bit) == 0) .black else .white;
-                if (sq == col and !has_oppo) continue :loop;
-                if (sq == col and has_oppo) break :loop true;
-                has_oppo = true;
+                if (own & bit != 0) {
+                    if (has_oppo) break :loop true else continue :loop;
+                }
+                if (opp & bit != 0) {
+                    has_oppo = true;
+                } else {
+                    continue :loop;
+                }
             }
         } else false;
 
@@ -126,35 +138,31 @@ pub fn playAt(b: Board, p: Coord, col: Color) !Board {
     var b1 = b;
     b1.setBitmask(bit0, col);
 
+    const occupied = b.white | b.black;
+    const own = if (col == .white) &b1.white else &b1.black;
+    const opp = if (col == .white) &b1.black else &b1.white;
+
     loop: for (&dirsteps[@intCast(p[1] * 8 + p[0])]) |steps| {
         for (steps) |bit| {
-            if ((b.occupied & bit) == 0) continue :loop;
-            const sq: Color = if ((b.color & bit) == 0) .black else .white;
-            if (sq == col) break;
+            if (occupied & bit == 0) continue :loop;
+            if (own.* & bit != 0) break;
         } else continue :loop;
 
         for (steps) |bit| {
-            assert((b.occupied & bit) != 0);
-            const sq: Color = if ((b.color & bit) == 0) .black else .white;
-            if (sq == col) continue :loop;
-            b1.setBitmask(bit, col);
+            if (opp.* & bit == 0) continue :loop;
+            own.* |= bit;
+            opp.* &= ~bit;
         }
-        unreachable;
     }
     return b1;
 }
 
 pub const Score = struct { whites: u32, blacks: u32 };
 pub fn computeScore(b: Board) Score {
-    var nbw: u32 = 0;
-    var nbb: u32 = 0;
-    var bit: u64 = 1;
-    for (0..64) |_| {
-        nbb += @intFromBool((b.occupied & bit != 0) and (b.color & bit == 0));
-        nbw += @intFromBool((b.occupied & bit != 0) and (b.color & bit != 0));
-        bit <<= 1;
-    }
-    return .{ .whites = nbw, .blacks = nbb };
+    return .{
+        .whites = @popCount(b.white),
+        .blacks = @popCount(b.black),
+    };
 }
 
 // bon pas d'état persistant pour l'instant
@@ -199,13 +207,73 @@ fn computeRandomMove(b: Board, col: Color, random: std.Random) Coord {
 
 fn evaluation(b: Board, col: Color) i32 {
     const score = computeScore(b);
-    const nb0: i64 = if (col == .white) score.whites else score.blacks;
-    const nb1: i64 = if (col == .black) score.whites else score.blacks;
+    const nb0: i32 = @intCast(if (col == .white) score.whites else score.blacks);
+    const nb1: i32 = @intCast(if (col == .black) score.whites else score.blacks);
     const nbempty: i32 = @intCast(64 - (score.whites + score.blacks));
-    const delta: i32 = @intCast(nb0 - nb1);
-    return delta + nbempty; // on considère que tous les vides sont à nous (pour éviter de chercher à maximiser la diff plutot que finir la partie)
+
+    // Piece difference
+    var eval: i32 = (nb0 - nb1) * 100;
+
+    // Corner occupancy
+    eval += cornerOccupancy(b, col) * 1000;
+
+    // Corner closeness
+    eval += cornerCloseness(b, col) * 500;
+
+    // Mobility (number of valid moves)
+    const mobility = @as(i32, @popCount(computeValidSquares(b, col))) -
+        @as(i32, @popCount(computeValidSquares(b, col.next())));
+    eval += mobility * 50;
+
+    // Stability (edges and stable discs)
+    eval += stabilityEvaluation(b, col) * 200;
+
+    // End game considerations
+    if (nbempty < 10) {
+        eval += (nb0 - nb1) * 200; // Emphasize piece difference in endgame
+    }
+
+    return eval;
 }
 
+fn cornerOccupancy(b: Board, col: Color) i32 {
+    var count: i32 = 0;
+    const corners = [_]Coord{ .{ 0, 0 }, .{ 0, 7 }, .{ 7, 0 }, .{ 7, 7 } };
+    for (corners) |c| {
+        if (b.get(c[0], c[1]) == col) {
+            count += 1;
+        } else if (b.get(c[0], c[1]) == col.next()) {
+            count -= 1;
+        }
+    }
+    return count;
+}
+
+fn cornerCloseness(b: Board, col: Color) i32 {
+    var count: i32 = 0;
+    const near_corners = [_]Coord{ .{ 0, 1 }, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 6 }, .{ 1, 6 }, .{ 1, 7 }, .{ 6, 0 }, .{ 6, 1 }, .{ 7, 1 }, .{ 6, 6 }, .{ 6, 7 }, .{ 7, 6 } };
+    for (near_corners) |c| {
+        if (b.get(c[0], c[1]) == col) {
+            count -= 1;
+        } else if (b.get(c[0], c[1]) == col.next()) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+fn stabilityEvaluation(b: Board, col: Color) i32 {
+    var count: i32 = 0;
+    // Check edges
+    for (0..8) |i| {
+        if (b.get(0, i) == col) count += 1;
+        if (b.get(7, i) == col) count += 1;
+        if (b.get(i, 0) == col) count += 1;
+        if (b.get(i, 7) == col) count += 1;
+    }
+    // More complex stability analysis could be added here
+    return count;
+}
 fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: Coord, score: i32 } {
     const valids = computeValidSquares(b, col);
 

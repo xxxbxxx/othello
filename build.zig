@@ -41,8 +41,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .optimize = optimize,
         .target = target,
-        .use_llvm = (optimize != .Debug) or true, // fuzz
-        .use_lld = (optimize != .Debug) or true,
+        .use_llvm = (optimize != .Debug),
+        .use_lld = (optimize != .Debug),
     });
 
     exe.linkLibrary(raylib_artifact);
