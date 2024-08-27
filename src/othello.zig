@@ -205,75 +205,71 @@ fn computeRandomMove(b: Board, col: Color, random: std.Random) Coord {
     }
 }
 
+const EvalWeights = struct {
+    piece_diff: i32 = 100,
+    corner_occupancy: i32 = 1000,
+    corner_closeness: i32 = 500,
+    mobility: i32 = 50,
+    stability: i32 = 200,
+    endgame_piece_diff: i32 = 200,
+};
+
+const weights = EvalWeights{};
+
 fn evaluation(b: Board, col: Color) i32 {
+    const own = if (col == .white) b.white else b.black;
+    const opp = if (col == .white) b.black else b.white;
+
     const score = computeScore(b);
-    const nb0: i32 = @intCast(if (col == .white) score.whites else score.blacks);
-    const nb1: i32 = @intCast(if (col == .black) score.whites else score.blacks);
+    const nb0: i32 = if (col == .white) @intCast(score.whites) else @intCast(score.blacks);
+    const nb1: i32 = if (col == .black) @intCast(score.whites) else @intCast(score.blacks);
     const nbempty: i32 = @intCast(64 - (score.whites + score.blacks));
 
-    // Piece difference
-    var eval: i32 = (nb0 - nb1) * 100;
+    var eval: i32 = (nb0 - nb1) * weights.piece_diff;
 
-    // Corner occupancy
-    eval += cornerOccupancy(b, col) * 1000;
+    // Occupation des coins
+    const corner_occupancy: i32 = blk: {
+        const CORNER_MASK: u64 = 0x8100000000000081; // Coins : a1, h1, a8, h8
+        const own_corners: i32 = @intCast(@popCount(own & CORNER_MASK));
+        const opp_corners: i32 = @intCast(@popCount(opp & CORNER_MASK));
+        break :blk own_corners - opp_corners;
+    };
+    eval += corner_occupancy * weights.corner_occupancy;
 
-    // Corner closeness
-    eval += cornerCloseness(b, col) * 500;
+    // Proximité des coins
+    const corner_closeness: i32 = blk: {
+        const X_SQUARE_MASK: u64 = 0x42C300000000C342; // Cases X adjacentes aux coins
+        const own_x_squares: i32 = @intCast(@popCount(own & X_SQUARE_MASK));
+        const opp_x_squares: i32 = @intCast(@popCount(opp & X_SQUARE_MASK));
+        break :blk opp_x_squares - own_x_squares;
+    };
+    eval += corner_closeness * weights.corner_closeness;
 
-    // Mobility (number of valid moves)
-    const mobility = @as(i32, @popCount(computeValidSquares(b, col))) -
-        @as(i32, @popCount(computeValidSquares(b, col.next())));
-    eval += mobility * 50;
+    // Mobilité
+    const mobility: i32 = blk: {
+        const own_mobility: i32 = @intCast(@popCount(computeValidSquares(b, col)));
+        const opp_mobility: i32 = @intCast(@popCount(computeValidSquares(b, col.next())));
+        break :blk own_mobility - opp_mobility;
+    };
+    eval += mobility * weights.mobility;
 
-    // Stability (edges and stable discs)
-    eval += stabilityEvaluation(b, col) * 200;
+    // Stabilité (bords)
+    const stability: i32 = blk: {
+        const EDGE_MASK: u64 = 0xFF818181818181FF; // Toutes les cases de bord
+        const own_edges: i32 = @intCast(@popCount(own & EDGE_MASK));
+        const opp_edges: i32 = @intCast(@popCount(opp & EDGE_MASK));
+        break :blk own_edges - opp_edges;
+    };
+    eval += stability * weights.stability;
 
-    // End game considerations
+    // Considérations de fin de partie
     if (nbempty < 10) {
-        eval += (nb0 - nb1) * 200; // Emphasize piece difference in endgame
+        eval += (nb0 - nb1) * weights.endgame_piece_diff;
     }
 
     return eval;
 }
 
-fn cornerOccupancy(b: Board, col: Color) i32 {
-    var count: i32 = 0;
-    const corners = [_]Coord{ .{ 0, 0 }, .{ 0, 7 }, .{ 7, 0 }, .{ 7, 7 } };
-    for (corners) |c| {
-        if (b.get(c[0], c[1]) == col) {
-            count += 1;
-        } else if (b.get(c[0], c[1]) == col.next()) {
-            count -= 1;
-        }
-    }
-    return count;
-}
-
-fn cornerCloseness(b: Board, col: Color) i32 {
-    var count: i32 = 0;
-    const near_corners = [_]Coord{ .{ 0, 1 }, .{ 1, 0 }, .{ 1, 1 }, .{ 0, 6 }, .{ 1, 6 }, .{ 1, 7 }, .{ 6, 0 }, .{ 6, 1 }, .{ 7, 1 }, .{ 6, 6 }, .{ 6, 7 }, .{ 7, 6 } };
-    for (near_corners) |c| {
-        if (b.get(c[0], c[1]) == col) {
-            count -= 1;
-        } else if (b.get(c[0], c[1]) == col.next()) {
-            count += 1;
-        }
-    }
-    return count;
-}
-
-fn stabilityEvaluation(b: Board, col: Color) i32 {
-    var count: i32 = 0;
-    // Check edges
-    for (0..8) |i| {
-        if (b.get(0, i) == col) count += 1;
-        if (b.get(7, i) == col) count += 1;
-        if (b.get(i, 0) == col) count += 1;
-        if (b.get(i, 7) == col) count += 1;
-    }
-    // More complex stability analysis could be added here
-    return count;
-}
 fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: Coord, score: i32 } {
     const valids = computeValidSquares(b, col);
 
