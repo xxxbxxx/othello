@@ -104,11 +104,16 @@ pub fn computeValidSquares(b: Board, col: Color) u64 {
     return valid;
 }
 
-pub fn playAt(b: Board, p: Coord, col: Color) !Board {
+pub fn isValidPlay(b: Board, p: Coord, col: Color) bool {
     assert(col != .empty);
-    const valid = computeValidSquares(b, col);
     const bit = bitmask(p[0], p[1]);
-    if (valid & bit == 0) return error.invalid;
+    return (computeValidSquares(b, col) & bit != 0);
+}
+
+pub fn playAt(b: Board, p: Coord, col: Color) Board {
+    assert(col != .empty);
+    const bit = bitmask(p[0], p[1]);
+    if (std.debug.runtime_safety) assert(computeValidSquares(b, col) & bit != 0);
 
     const own = if (col == .white) b.white else b.black;
     const opp = if (col == .white) b.black else b.white;
@@ -181,6 +186,8 @@ pub fn computeBestMove(engine: Engine, b: Board, col: Color, alloc: std.mem.Allo
 
 fn computeRandomMove(b: Board, col: Color, random: std.Random) Coord {
     const valids = computeValidSquares(b, col);
+    assert(valids != 0);
+
     while (true) {
         const index = random.intRangeAtMost(u6, 0, 63);
         const bit = @as(u64, 1) << index;
@@ -265,7 +272,7 @@ fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: 
             if (valids & bit == 0) continue;
 
             const coord: Coord = .{ @intCast(x), @intCast(y) };
-            const after = playAt(b, coord, col) catch unreachable;
+            const after = playAt(b, coord, col);
             const delta = evaluation(after, col);
             if (best_score < delta or best == null) {
                 best = coord;
@@ -290,7 +297,7 @@ fn computeStepBestMove(b: Board, col: Color, random: std.Random, ctx: *Context, 
             if (valids & bit == 0) continue;
 
             const coord: Coord = .{ @intCast(x), @intCast(y) };
-            const after = playAt(b, coord, col) catch unreachable;
+            const after = playAt(b, coord, col);
 
             const expected: i32 = score: {
                 if (ctx.dico.get(after)) |v| break :score v;
@@ -355,9 +362,9 @@ const dirsteps: [8 * 8][8][]const u64 = blk: {
 
 fn playAtRef(b: Board, p: Coord, col: Color) !Board {
     assert(col != .empty);
-    const valid = computeValidSquares(b, col);
     const bit0 = bitmask(p[0], p[1]);
-    if (valid & bit0 == 0) return error.invalid;
+    assert(computeValidSquares(b, col) & bit0 != 0);
+
     var b1 = b;
     b1.setBitmask(bit0, col);
 

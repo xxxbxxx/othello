@@ -76,7 +76,8 @@ pub fn main() anyerror!void {
         };
 
         if (clicked_square) |sq| play: {
-            game_state.board = othello.playAt(game_state.board, sq, game_state.nextcol) catch break :play;
+            if (!othello.isValidPlay(game_state.board, sq, game_state.nextcol)) break :play;
+            game_state.board = othello.playAt(game_state.board, sq, game_state.nextcol);
             game_state.nextcol = game_state.nextcol.next();
 
             if (!game_over) {
@@ -225,7 +226,7 @@ fn playGame(seed: u32, alloc: std.mem.Allocator, engine: othello.Engine) othello
     var game_over = false;
     while (!game_over) {
         const pos = othello.computeBestMove(if (nextcol == .black) .random else engine, board, nextcol, alloc, random);
-        board = othello.playAt(board, pos, nextcol) catch break;
+        board = othello.playAt(board, pos, nextcol);
         nextcol = nextcol.next();
 
         const can_play = othello.computeValidSquares(board, nextcol) != 0;
@@ -274,7 +275,8 @@ test "fuzz" {
             input_idx += 1;
             break :pos .{ @intCast(byte % 8), @intCast((byte / 8) % 8) };
         };
-        board = othello.playAt(board, pos, nextcol) catch break;
+        if (!othello.isValidPlay(board, pos, nextcol)) break;
+        board = othello.playAt(board, pos, nextcol);
         nextcol = nextcol.next();
 
         const can_play = othello.computeValidSquares(board, nextcol) != 0;
