@@ -17,6 +17,9 @@ pub fn main() anyerror!void {
     var frame_arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer frame_arena.deinit();
 
+    var prng = std.Random.DefaultPrng.init(0);
+    const random = prng.random();
+
     // Initialization
     //--------------------------------------------------------------------------------------
     const screenWidth = 1000;
@@ -36,6 +39,7 @@ pub fn main() anyerror!void {
     var nextcol: othello.Color = .black;
     var showhelpers = true;
     var game_over = false;
+    var is_AI = [_]bool{ undefined, true, false };
 
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
@@ -53,13 +57,17 @@ pub fn main() anyerror!void {
 
         const clicked_square: ?othello.Coord = sq: {
             if (game_over) break :sq null;
-            if (rl.isMouseButtonPressed(rl.MouseButton.mouse_button_left)) {
-                const p = Vec2.multiply(
-                    Vec2.subtract(rl.getMousePosition(), main_board_pos),
-                    .{ .x = 8.0 / main_board_size, .y = 8.0 / main_board_size },
-                );
-                if (p.x >= 0 and p.x < 8 and p.y >= 0 and p.y < 8)
-                    break :sq .{ @intFromFloat(p.x), @intFromFloat(p.y) };
+            if (is_AI[@intFromEnum(nextcol)]) {
+                break :sq othello.computeBestMove(board, nextcol, frame_alloc, random);
+            } else {
+                if (rl.isMouseButtonPressed(rl.MouseButton.mouse_button_left)) {
+                    const p = Vec2.multiply(
+                        Vec2.subtract(rl.getMousePosition(), main_board_pos),
+                        .{ .x = 8.0 / main_board_size, .y = 8.0 / main_board_size },
+                    );
+                    if (p.x >= 0 and p.x < 8 and p.y >= 0 and p.y < 8)
+                        break :sq .{ @intFromFloat(p.x), @intFromFloat(p.y) };
+                }
             }
             break :sq null;
         };
@@ -84,10 +92,12 @@ pub fn main() anyerror!void {
             drawPawn(.{ .x = 815, .y = 65 }, 20, nextcol);
 
         const score = othello.computeScore(board);
-        const scoretxt = try std.fmt.allocPrintZ(frame_alloc, "Score: {} - {}", .{ score.whites, score.blacks });
+        const scoretxt = try std.fmt.allocPrintZ(frame_alloc, "Score: {} - {}", .{ score.blacks, score.whites });
         rl.drawText(scoretxt, 700, 100, 30, rl.Color.light_gray);
 
         _ = gui.guiCheckBox(.{ .x = 700, .y = 500, .width = 20, .height = 20 }, "show helpers", &showhelpers);
+        _ = gui.guiCheckBox(.{ .x = 700, .y = 525, .width = 20, .height = 20 }, "white AI", &is_AI[@intFromEnum(othello.Color.white)]);
+        _ = gui.guiCheckBox(.{ .x = 700, .y = 550, .width = 20, .height = 20 }, "black AI", &is_AI[@intFromEnum(othello.Color.black)]);
 
         if (game_over) {
             rl.drawText("Game Over!", 175, 200, 125, rl.Color.light_gray);

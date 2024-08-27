@@ -126,3 +126,33 @@ pub fn computeScore(b: Board) struct { whites: u32, blacks: u32 } {
     }
     return .{ .whites = nbw, .blacks = nbb };
 }
+
+pub fn computeBestMove(b: Board, col: Color, alloc: std.mem.Allocator, random: std.Random) Coord {
+    _ = alloc;
+
+    const valids = computeValidSquares(b, col);
+
+    var best: ?Coord = null;
+    var best_score: i32 = 0;
+    for (0..8) |y| {
+        for (0..8) |x| {
+            const bit = bitmask(x, y);
+            if (valids & bit == 0) continue;
+
+            const coord: Coord = .{ @intCast(x), @intCast(y) };
+            const after = playAt(b, coord, col) catch unreachable;
+            const score = computeScore(after);
+            const nb0: i64 = if (col == .white) score.whites else score.blacks;
+            const nb1: i64 = if (col == .black) score.whites else score.blacks;
+            const delta: i32 = @intCast(nb0 - nb1);
+            if (best_score < delta or best == null) {
+                best = coord;
+                best_score = delta;
+            } else if (best_score == delta and random.boolean()) {
+                best = coord;
+                best_score = delta;
+            }
+        }
+    }
+    return best.?;
+}
