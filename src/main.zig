@@ -56,12 +56,28 @@ pub fn main() anyerror!void {
     rl.setTargetFPS(60); // Set our game to run at 60 frames-per-second
     //--------------------------------------------------------------------------------------
 
+    const main_board_pos: Vec2 = .{ .x = 20, .y = 20 };
+    const main_board_size: f32 = 640;
+
+    var board = init_board;
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
-        // Update
-        //----------------------------------------------------------------------------------
-        // TODO: Update your variables here
-        //----------------------------------------------------------------------------------
+        const clicked_square: ?@Vector(2, u8) = sq: {
+            if (rl.isMouseButtonPressed(rl.MouseButton.mouse_button_left)) {
+                const p = Vec2.multiply(
+                    Vec2.subtract(rl.getMousePosition(), main_board_pos),
+                    .{ .x = 8.0 / main_board_size, .y = 8.0 / main_board_size },
+                );
+                if (p.x >= 0 and p.x < 8 and p.y >= 0 and p.y < 8)
+                    break :sq .{ @intFromFloat(p.x), @intFromFloat(p.y) };
+            }
+            break :sq null;
+        };
+
+        if (clicked_square) |sq| {
+            const side: Color = if (board.get(sq[0], sq[1]) == .black) .white else .black;
+            board.set(sq[0], sq[1], side);
+        }
 
         // Draw
         //----------------------------------------------------------------------------------
@@ -69,10 +85,10 @@ pub fn main() anyerror!void {
         defer rl.endDrawing();
 
         rl.clearBackground(rl.Color.dark_brown);
-        drawBoard(init_board, .{ .x = 20, .y = 20 }, 640);
+        drawBoard(board, main_board_pos, main_board_size);
 
         //            rl.drawCircle(200, 200, 100, rl.Color.red);
-        rl.drawText("Congrats! You created your first window!", 190, 200, 20, rl.Color.light_gray);
+        // rl.drawText("Congrats! You created your first window!", 190, 200, 20, rl.Color.light_gray);
         //----------------------------------------------------------------------------------
 
         if (gui.guiLabelButton(.{ .x = 10, .y = 10, .width = 100, .height = 100 }, "coucou") != 0) {
