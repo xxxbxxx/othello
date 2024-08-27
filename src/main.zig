@@ -5,44 +5,6 @@ const gui = @import("raygui");
 
 const assert = std.debug.assert;
 
-const Color = enum { empty, black, white };
-const Vec2 = rl.Vector2;
-const Board = struct {
-    occupied: u64,
-    color: u64,
-
-    fn get(b: @This(), x: usize, y: usize) Color {
-        assert(x < 8 and y < 8);
-        const bit: u64 = @as(u64, 1) << @intCast(y * 8 + x);
-        if ((b.occupied & bit) == 0) return .empty;
-        return if ((b.color & bit) == 0) .black else .white;
-    }
-    fn set(b: *@This(), x: usize, y: usize, c: Color) void {
-        assert(x < 8 and y < 8);
-        const bit: u64 = @as(u64, 1) << @intCast(y * 8 + x);
-        switch (c) {
-            .empty => b.occupied &= ~bit,
-            .black => {
-                b.occupied |= bit;
-                b.color &= ~bit;
-            },
-            .white => {
-                b.occupied |= bit;
-                b.color |= bit;
-            },
-        }
-    }
-};
-
-const init_board: Board = init: {
-    var b: Board = .{ .color = 0, .occupied = 0 };
-    b.set(3, 3, .white);
-    b.set(4, 4, .white);
-    b.set(3, 4, .black);
-    b.set(4, 3, .black);
-    break :init b;
-};
-
 pub fn main() anyerror!void {
     // Initialization
     //--------------------------------------------------------------------------------------
@@ -60,9 +22,11 @@ pub fn main() anyerror!void {
     const main_board_size: f32 = 640;
 
     var board = init_board;
+    var nextcol: Color = .white;
+
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
-        const clicked_square: ?@Vector(2, u8) = sq: {
+        const clicked_square: ?V2i = sq: {
             if (rl.isMouseButtonPressed(rl.MouseButton.mouse_button_left)) {
                 const p = Vec2.multiply(
                     Vec2.subtract(rl.getMousePosition(), main_board_pos),
@@ -74,9 +38,9 @@ pub fn main() anyerror!void {
             break :sq null;
         };
 
-        if (clicked_square) |sq| {
-            const side: Color = if (board.get(sq[0], sq[1]) == .black) .white else .black;
-            board.set(sq[0], sq[1], side);
+        if (clicked_square) |sq| play: {
+            board = play(board, sq, nextcol) catch break :play;
+            nextcol = if (nextcol == .white) .black else .white;
         }
 
         // Draw
@@ -86,6 +50,7 @@ pub fn main() anyerror!void {
 
         rl.clearBackground(rl.Color.dark_brown);
         drawBoard(board, main_board_pos, main_board_size);
+        drawHelper(board, nextcol, main_board_pos, main_board_size);
 
         //            rl.drawCircle(200, 200, 100, rl.Color.red);
         // rl.drawText("Congrats! You created your first window!", 190, 200, 20, rl.Color.light_gray);
@@ -143,4 +108,125 @@ fn drawBoard(b: Board, pos: Vec2, size: f32) void {
     }
 
     rl.drawRectangleRoundedLinesEx(rect, 0.1, 7, 5.0, rl.Color.black);
+}
+
+fn drawHelper(b: Board, nextcol: Color, pos: Vec2, size: f32) void {
+    const pos0 = Vec2.add(pos, .{ .x = size / 16, .y = size / 16 });
+
+    const valids = computeValidSquares(b, nextcol);
+    for (0..8) |y| {
+        for (0..8) |x| {
+            if (valids & Board.bitmask(x, y) == 0) continue;
+            rl.drawCircleLinesV(addmul(pos0, size / 8, .{ .x = @floatFromInt(x), .y = @floatFromInt(y) }), size / 20, rl.Color.red);
+        }
+    }
+}
+
+//  ---- board
+
+const Color = enum { empty, black, white };
+const Vec2 = rl.Vector2;
+const Board = struct {
+    occupied: u64,
+    color: u64,
+
+    fn bitmask(x: anytype, y: anytype) u64 {
+        return @as(u64, 1) << @intCast(y * 8 + x);
+    }
+    fn get(b: @This(), x: anytype, y: anytype) Color {
+        assert(x < 8 and y < 8);
+        const bit: u64 = bitmask(x, y);
+        if ((b.occupied & bit) == 0) return .empty;
+        return if ((b.color & bit) == 0) .black else .white;
+    }
+    fn set(b: *@This(), x: anytype, y: anytype, c: Color) void {
+        assert(x < 8 and y < 8);
+        const bit: u64 = bitmask(x, y);
+        switch (c) {
+            .empty => b.occupied &= ~bit,
+            .black => {
+                b.occupied |= bit;
+                b.color &= ~bit;
+            },
+            .white => {
+                b.occupied |= bit;
+                b.color |= bit;
+            },
+        }
+    }
+};
+
+const init_board: Board = init: {
+    var b: Board = .{ .color = 0, .occupied = 0 };
+    b.set(3, 3, .white);
+    b.set(4, 4, .white);
+    b.set(3, 4, .black);
+    b.set(4, 3, .black);
+    break :init b;
+};
+
+const V2i = @Vector(2, i8);
+const compass_dirs: []const V2i = &.{
+    .{ 1, 0 }, .{ -1, 0 }, .{ 0, 1 },  .{ 0, -1 },
+    .{ 1, 1 }, .{ -1, 1 }, .{ 1, -1 }, .{ -1, -1 },
+};
+
+fn computeValidSquares(b: Board, col: Color) u64 {
+    assert(col != .empty);
+    var valid: u64 = 0;
+    for (0..8) |y| {
+        for (0..8) |x| {
+            if (b.get(x, y) != .empty) continue;
+
+            const ok: bool = loop: for (compass_dirs) |d| {
+                var p: V2i = .{ @intCast(x), @intCast(y) };
+                var has_oppo = false;
+                while (true) {
+                    p += d;
+                    if (@reduce(.Or, @min(@max(p, V2i{ 0, 0 }), V2i{ 7, 7 }) != p)) continue :loop;
+                    const sq = b.get(p[0], p[1]);
+                    if (sq == .empty) continue :loop;
+                    if (sq == col and !has_oppo) continue :loop;
+                    if (sq == col and has_oppo) break :loop true;
+                    if (sq != col) has_oppo = true;
+                }
+            } else false;
+
+            if (ok) {
+                valid |= Board.bitmask(x, y);
+            }
+        }
+    }
+    return valid;
+}
+
+fn play(b: Board, p: V2i, col: Color) !Board {
+    assert(col != .empty);
+    const valid = computeValidSquares(b, col);
+    const bit = Board.bitmask(p[0], p[1]);
+    if (valid & bit == 0) return error.invalid;
+    var b1 = b;
+    b1.set(p[0], p[1], col);
+
+    loop: for (compass_dirs) |d| {
+        var p1 = p;
+        while (true) {
+            p1 += d;
+            if (@reduce(.Or, @min(@max(p1, V2i{ 0, 0 }), V2i{ 7, 7 }) != p1)) continue :loop;
+            const sq = b.get(p1[0], p1[1]);
+            if (sq == .empty) continue :loop;
+            if (sq == col) break;
+        }
+
+        p1 = p;
+        while (true) {
+            p1 += d;
+            assert(@reduce(.Or, @min(@max(p1, V2i{ 0, 0 }), V2i{ 7, 7 }) == p1));
+            const sq = b.get(p1[0], p1[1]);
+            assert(sq != .empty);
+            if (sq == col) continue :loop;
+            b1.set(p1[0], p1[1], col);
+        }
+    }
+    return b1;
 }
