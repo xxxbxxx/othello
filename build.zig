@@ -5,6 +5,8 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const use_llvm : ?bool = if (optimize != .Debug or target.query.os_tag == .windows) true else null;	// or fuzz?
+	
     const raylib_dep = b.dependency("raylib-zig", .{
         .target = target,
         .optimize = .ReleaseFast,
@@ -41,8 +43,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .optimize = optimize,
         .target = target,
-        .use_llvm = (optimize != .Debug),
-        .use_lld = (optimize != .Debug),
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
     });
 
     exe.linkLibrary(raylib_artifact);
@@ -59,8 +61,8 @@ pub fn build(b: *std.Build) !void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .use_llvm = (optimize != .Debug),
-        .use_lld = (optimize != .Debug),
+        .use_llvm = use_llvm,
+        .use_lld = use_llvm,
     });
     const test_cmd = b.addRunArtifact(main_test);
     const test_step = b.step("test", "run tests");
