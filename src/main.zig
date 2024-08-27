@@ -39,7 +39,9 @@ pub fn main() anyerror!void {
     var nextcol: othello.Color = .black;
     var showhelpers = true;
     var game_over = false;
-    var is_AI = [_]bool{ undefined, true, false };
+    var ai_engine = [_]othello.Engine{ undefined, .greedy, .none };
+
+    var gui_dropdowns_states = [_]bool{ false, false };
 
     // Main game loop
     while (!rl.windowShouldClose()) { // Detect window close button or ESC key
@@ -57,9 +59,8 @@ pub fn main() anyerror!void {
 
         const clicked_square: ?othello.Coord = sq: {
             if (game_over) break :sq null;
-            if (is_AI[@intFromEnum(nextcol)]) {
-                break :sq othello.computeBestMove(board, nextcol, frame_alloc, random);
-            } else {
+            const engine = ai_engine[@intFromEnum(nextcol)];
+            if (engine == .none) {
                 if (rl.isMouseButtonPressed(rl.MouseButton.mouse_button_left)) {
                     const p = Vec2.multiply(
                         Vec2.subtract(rl.getMousePosition(), main_board_pos),
@@ -68,8 +69,10 @@ pub fn main() anyerror!void {
                     if (p.x >= 0 and p.x < 8 and p.y >= 0 and p.y < 8)
                         break :sq .{ @intFromFloat(p.x), @intFromFloat(p.y) };
                 }
+                break :sq null;
+            } else {
+                break :sq othello.computeBestMove(engine, board, nextcol, frame_alloc, random);
             }
-            break :sq null;
         };
 
         if (clicked_square) |sq| play: {
@@ -96,8 +99,18 @@ pub fn main() anyerror!void {
         rl.drawText(scoretxt, 700, 100, 30, rl.Color.light_gray);
 
         _ = gui.guiCheckBox(.{ .x = 700, .y = 500, .width = 20, .height = 20 }, "show helpers", &showhelpers);
-        _ = gui.guiCheckBox(.{ .x = 700, .y = 525, .width = 20, .height = 20 }, "white AI", &is_AI[@intFromEnum(othello.Color.white)]);
-        _ = gui.guiCheckBox(.{ .x = 700, .y = 550, .width = 20, .height = 20 }, "black AI", &is_AI[@intFromEnum(othello.Color.black)]);
+
+        rl.drawText("Black AI: ", 700, 525, 10, rl.Color.light_gray);
+        rl.drawText("White AI: ", 700, 550, 10, rl.Color.light_gray);
+        const ai_list = comptime list: {
+            var t: [:0]const u8 = "";
+            for (std.meta.tags(othello.Engine), 0..) |tag, i| {
+                t = if (i == 0) @tagName(tag) else t ++ ";" ++ @tagName(tag);
+            }
+            break :list t;
+        };
+        if (gui.guiDropdownBox(.{ .x = 750, .y = 525, .width = 100, .height = 20 }, ai_list, @ptrCast(&ai_engine[@intFromEnum(othello.Color.black)]), gui_dropdowns_states[0]) != 0) gui_dropdowns_states[0] = !gui_dropdowns_states[0];
+        if (gui.guiDropdownBox(.{ .x = 750, .y = 550, .width = 100, .height = 20 }, ai_list, @ptrCast(&ai_engine[@intFromEnum(othello.Color.white)]), gui_dropdowns_states[1]) != 0) gui_dropdowns_states[1] = !gui_dropdowns_states[1];
 
         if (game_over) {
             rl.drawText("Game Over!", 175, 200, 125, rl.Color.light_gray);

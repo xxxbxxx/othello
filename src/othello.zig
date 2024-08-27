@@ -127,9 +127,33 @@ pub fn computeScore(b: Board) struct { whites: u32, blacks: u32 } {
     return .{ .whites = nbw, .blacks = nbb };
 }
 
-pub fn computeBestMove(b: Board, col: Color, alloc: std.mem.Allocator, random: std.Random) Coord {
-    _ = alloc;
+// bon pas d'état persistant pour l'instant
+pub const Engine = enum(i32) {
+    none,
+    random,
+    greedy,
+};
 
+pub fn computeBestMove(engine: Engine, b: Board, col: Color, alloc: std.mem.Allocator, random: std.Random) Coord {
+    _ = alloc;
+    return switch (engine) {
+        .none => unreachable,
+        .random => computeRandomMove(b, col, random),
+        .greedy => computeGreedyMove(b, col, random),
+    };
+}
+
+fn computeRandomMove(b: Board, col: Color, random: std.Random) Coord {
+    const valids = computeValidSquares(b, col);
+    while (true) {
+        const index = random.intRangeAtMost(u6, 0, 63);
+        const bit = @as(u64, 1) << index;
+        if (valids & bit == 0) continue;
+        return .{ index % 8, index / 8 };
+    }
+}
+
+fn computeGreedyMove(b: Board, col: Color, random: std.Random) Coord {
     const valids = computeValidSquares(b, col);
 
     var best: ?Coord = null;
