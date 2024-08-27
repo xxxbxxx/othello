@@ -71,90 +71,76 @@ pub const init_board: Board = init: {
     break :init b;
 };
 
-const dirsteps: [8 * 8][8][]const u64 = blk: {
-    @setEvalBranchQuota(10000);
-    // nb: testé avec u8 ibit pltuot que u64 mask.  -> 1.22x plus lent
-
-    const compass_dirs: []const Coord = &.{
-        .{ 1, 0 }, .{ -1, 0 }, .{ 0, 1 },  .{ 0, -1 },
-        .{ 1, 1 }, .{ -1, 1 }, .{ 1, -1 }, .{ -1, -1 },
-    };
-    var allsteps: [8 * 8][8][]const u64 = undefined;
-    for (0..8) |y| {
-        for (0..8) |x| {
-            nextdir: for (compass_dirs, 0..) |d, idir| {
-                var steps: []const u64 = &.{};
-                var p: Coord = .{ @intCast(x), @intCast(y) };
-                while (true) {
-                    p = add(p, d);
-                    if (!inBounds(p, Coord{ 0, 0 }, Coord{ 7, 7 })) {
-                        allsteps[y * 8 + x][idir] = steps;
-                        continue :nextdir;
-                    }
-                    steps = steps ++ .{bitmask(p[0], p[1])};
-                }
-            }
-        }
-    }
-    break :blk allsteps;
-};
-
 pub fn computeValidSquares(b: Board, col: Color) u64 {
     assert(col != .empty);
-    const occupied = b.white | b.black;
     const own = if (col == .white) b.white else b.black;
     const opp = if (col == .white) b.black else b.white;
+    const empty = ~(own | opp);
     var valid: u64 = 0;
 
-    for (&dirsteps, 0..) |dirs, index| {
-        const bit0: u64 = @as(u64, 1) << @intCast(index);
-        if (occupied & bit0 != 0) continue;
-        const ok: bool = loop: for (&dirs) |steps| {
-            var has_oppo = false;
-            for (steps) |bit| {
-                if (own & bit != 0) {
-                    if (has_oppo) break :loop true else continue :loop;
-                }
-                if (opp & bit != 0) {
-                    has_oppo = true;
-                } else {
-                    continue :loop;
-                }
-            }
-        } else false;
+    // https://olinjohnson.github.io/posts/optimizing-chess-othello-and-connect-4-with-bitboards/
 
-        if (ok) {
-            valid |= bit0;
+    const DIRECTIONS_SHIFTS = [8]i8{ -9, -8, -7, -1, 1, 7, 8, 9 };
+    inline for (DIRECTIONS_SHIFTS) |dir| {
+        const mask: u64 = switch (dir) {
+            -9, -1, 7 => 0xFEFEFEFEFEFEFEFE,
+            1, 9, -7 => 0x7F7F7F7F7F7F7F7F,
+            -8, 8 => 0xFFFFFFFFFFFFFFFF,
+            else => unreachable,
+        };
+
+        const udir: u6 = @intCast(@abs(dir));
+        if (dir > 0) {
+            var temp = opp & ((own & mask) << udir);
+            inline for (0..5) |_| temp |= opp & ((temp & mask) << udir);
+            valid |= empty & ((temp & mask) << udir);
+        } else {
+            var temp = opp & ((own & mask) >> udir);
+            inline for (0..5) |_| temp |= opp & ((temp & mask) >> udir);
+            valid |= empty & ((temp & mask) >> udir);
         }
     }
+
     return valid;
 }
 
 pub fn playAt(b: Board, p: Coord, col: Color) !Board {
     assert(col != .empty);
     const valid = computeValidSquares(b, col);
-    const bit0 = bitmask(p[0], p[1]);
-    if (valid & bit0 == 0) return error.invalid;
-    var b1 = b;
-    b1.setBitmask(bit0, col);
+    const bit = bitmask(p[0], p[1]);
+    if (valid & bit == 0) return error.invalid;
 
-    const occupied = b.white | b.black;
-    const own = if (col == .white) &b1.white else &b1.black;
-    const opp = if (col == .white) &b1.black else &b1.white;
+    const own = if (col == .white) b.white else b.black;
+    const opp = if (col == .white) b.black else b.white;
 
-    loop: for (&dirsteps[@intCast(p[1] * 8 + p[0])]) |steps| {
-        for (steps) |bit| {
-            if (occupied & bit == 0) continue :loop;
-            if (own.* & bit != 0) break;
-        } else continue :loop;
+    var flipped: u64 = bit;
 
-        for (steps) |bit| {
-            if (opp.* & bit == 0) continue :loop;
-            own.* |= bit;
-            opp.* &= ~bit;
+    const DIRECTIONS_SHIFTS = [8]i8{ -9, -8, -7, -1, 1, 7, 8, 9 };
+    inline for (DIRECTIONS_SHIFTS) |dir| {
+        const mask: u64 = switch (dir) {
+            -9, -1, 7 => 0xFEFEFEFEFEFEFEFE,
+            1, 9, -7 => 0x7F7F7F7F7F7F7F7F,
+            -8, 8 => 0xFFFFFFFFFFFFFFFF,
+            else => unreachable,
+        };
+
+        const udir: u6 = @intCast(@abs(dir));
+        if (dir > 0) {
+            var temp = opp & ((bit & mask) << udir);
+            inline for (0..5) |_| temp |= opp & ((temp & mask) << udir);
+            if (own & ((temp & mask) << udir) != 0) flipped |= temp;
+        } else {
+            var temp = opp & ((bit & mask) >> udir);
+            inline for (0..5) |_| temp |= opp & ((temp & mask) >> udir);
+            if (own & ((temp & mask) >> udir) != 0) flipped |= temp;
         }
     }
-    return b1;
+
+    if (col == .white) {
+        return .{ .white = b.white | flipped, .black = b.black & ~flipped };
+    } else {
+        return .{ .white = b.white & ~flipped, .black = b.black | flipped };
+    }
 }
 
 pub const Score = struct { whites: u32, blacks: u32 };
@@ -170,7 +156,6 @@ pub const Engine = enum(i32) {
     none,
     random,
     greedy,
-    one_step,
     two_steps,
     five_steps,
 };
@@ -189,7 +174,6 @@ pub fn computeBestMove(engine: Engine, b: Board, col: Color, alloc: std.mem.Allo
         .none => unreachable,
         .random => computeRandomMove(b, col, random),
         .greedy => computeGreedyMove(b, col, random).?.coord,
-        .one_step => computeStepBestMove(b, col, random, &ctx, 1).?.coord,
         .two_steps => computeStepBestMove(b, col, random, &ctx, 2).?.coord,
         .five_steps => computeStepBestMove(b, col, random, &ctx, 5).?.coord,
     };
@@ -335,4 +319,150 @@ fn computeStepBestMove(b: Board, col: Color, random: std.Random, ctx: *Context, 
         }
     }
     return if (best) |coord| .{ .coord = coord, .score = best_score } else null;
+}
+
+// ================================================================
+// Tests
+// ================================================================
+
+const dirsteps: [8 * 8][8][]const u64 = blk: {
+    @setEvalBranchQuota(10000);
+    // nb: testé avec u8 ibit pltuot que u64 mask.  -> 1.22x plus lent
+
+    const compass_dirs: []const Coord = &.{
+        .{ 1, 0 }, .{ -1, 0 }, .{ 0, 1 },  .{ 0, -1 },
+        .{ 1, 1 }, .{ -1, 1 }, .{ 1, -1 }, .{ -1, -1 },
+    };
+    var allsteps: [8 * 8][8][]const u64 = undefined;
+    for (0..8) |y| {
+        for (0..8) |x| {
+            nextdir: for (compass_dirs, 0..) |d, idir| {
+                var steps: []const u64 = &.{};
+                var p: Coord = .{ @intCast(x), @intCast(y) };
+                while (true) {
+                    p = add(p, d);
+                    if (!inBounds(p, Coord{ 0, 0 }, Coord{ 7, 7 })) {
+                        allsteps[y * 8 + x][idir] = steps;
+                        continue :nextdir;
+                    }
+                    steps = steps ++ .{bitmask(p[0], p[1])};
+                }
+            }
+        }
+    }
+    break :blk allsteps;
+};
+
+fn playAtRef(b: Board, p: Coord, col: Color) !Board {
+    assert(col != .empty);
+    const valid = computeValidSquares(b, col);
+    const bit0 = bitmask(p[0], p[1]);
+    if (valid & bit0 == 0) return error.invalid;
+    var b1 = b;
+    b1.setBitmask(bit0, col);
+
+    const occupied = b.white | b.black;
+    const own = if (col == .white) &b1.white else &b1.black;
+    const opp = if (col == .white) &b1.black else &b1.white;
+
+    loop: for (&dirsteps[@intCast(p[1] * 8 + p[0])]) |steps| {
+        for (steps) |bit| {
+            if (occupied & bit == 0) continue :loop;
+            if (own.* & bit != 0) break;
+        } else continue :loop;
+
+        for (steps) |bit| {
+            if (opp.* & bit == 0) continue :loop;
+            own.* |= bit;
+            opp.* &= ~bit;
+        }
+    }
+    return b1;
+}
+
+fn computeValidSquaresRef(b: Board, col: Color) u64 {
+    assert(col != .empty);
+    const occupied = b.white | b.black;
+    const own = if (col == .white) b.white else b.black;
+    const opp = if (col == .white) b.black else b.white;
+    var valid: u64 = 0;
+
+    for (&dirsteps, 0..) |dirs, index| {
+        const bit0: u64 = @as(u64, 1) << @intCast(index);
+        if (occupied & bit0 != 0) continue;
+        const ok: bool = loop: for (&dirs) |steps| {
+            var has_oppo = false;
+            for (steps) |bit| {
+                if (own & bit != 0) {
+                    if (has_oppo) break :loop true else continue :loop;
+                }
+                if (opp & bit != 0) {
+                    has_oppo = true;
+                } else {
+                    continue :loop;
+                }
+            }
+        } else false;
+
+        if (ok) {
+            valid |= bit0;
+        }
+    }
+    return valid;
+}
+
+test "computeValidSquares" {
+    const test_cases = &[_]Board{
+        init_board,
+        .{ .white = 0, .black = 0 },
+        .{ .white = 1, .black = 0 },
+        .{ .white = 0, .black = 1 },
+        .{ .white = 0xFFFFFFFFFFFFFFFF, .black = 0x0 },
+        .{ .white = 0x1111111111111110, .black = 0x1 },
+        .{ .white = 0x0123456789ABCDEF, .black = 0x1240000000000010 },
+        .{ .white = 0x7F7F70000F7F7F7E, .black = 0xFF0000001 },
+        .{ .white = 0xFEFEFEFE00000EFE, .black = 0xFF00001 },
+    };
+    for (test_cases) |b| {
+        const new_w = computeValidSquares(b, .white);
+        const old_w = computeValidSquaresRef(b, .white);
+        try std.testing.expectEqual(old_w, new_w);
+
+        const new_b = computeValidSquares(b, .black);
+        const old_b = computeValidSquaresRef(b, .black);
+        try std.testing.expectEqual(old_b, new_b);
+    }
+}
+
+test "computeValidSquares fuzz" {
+    const input_bytes = std.testing.fuzzInput(.{});
+    if (input_bytes.len != 16) return;
+    var b: Board = std.mem.bytesAsValue(Board, input_bytes[0..16]).*;
+    b.black &= ~b.white; // cleanu data
+
+    const new_w = computeValidSquares(b, .white);
+    const old_w = computeValidSquaresRef(b, .white);
+    try std.testing.expectEqual(old_w, new_w);
+
+    const new_b = computeValidSquares(b, .black);
+    const old_b = computeValidSquaresRef(b, .black);
+    try std.testing.expectEqual(old_b, new_b);
+}
+
+test "playAt fuzz" {
+    const input_bytes = std.testing.fuzzInput(.{});
+    if (input_bytes.len != 18) return;
+    var b: Board = std.mem.bytesAsValue(Board, input_bytes[0..16]).*;
+    b.black &= ~b.white; // cleanup data
+    var p: Coord = std.mem.bytesAsValue(Coord, input_bytes[16..18]).*;
+    p[0] &= 0x7;
+    p[1] &= 0x7;
+
+    const new_w = playAt(b, p, .white);
+    const old_w = playAtRef(b, p, .white);
+    try std.testing.expectEqual(old_w, new_w);
+
+    const new_b = playAt(b, p, .black);
+    const old_b = playAtRef(b, p, .black);
+    try std.testing.expectEqual(old_b, new_b);
 }
