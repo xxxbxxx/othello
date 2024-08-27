@@ -55,7 +55,7 @@ pub fn main() anyerror!void {
             drawHelper(board, nextcol, main_board_pos, main_board_size);
 
         rl.drawText("Next: ", 700, 50, 30, rl.Color.light_gray);
-        drawPawn(.{ .x = 820, .y = 65 }, 20, nextcol);
+        drawPawn(.{ .x = 815, .y = 65 }, 20, nextcol);
         _ = gui.guiCheckBox(.{ .x = 700, .y = 500, .width = 20, .height = 20 }, "show helpers", &showhelpers);
     }
 }
@@ -167,7 +167,15 @@ const init_board: Board = init: {
     break :init b;
 };
 
-const V2i = @Vector(2, i8);
+const V2i = [2]i8; //@Vector(2, i8); ..selfhosted
+fn add(a: V2i, b: V2i) V2i {
+    return .{ a[0] + b[0], a[1] + b[1] };
+}
+fn inBounds(p: V2i, min: V2i, max: V2i) bool {
+    // @reduce(.And, @min(@max(p, V2i{ 0, 0 }), V2i{ 7, 7 }) == p))
+    return p[0] >= min[0] and p[0] <= max[0] and p[1] >= min[1] and p[1] <= max[1];
+}
+
 const compass_dirs: []const V2i = &.{
     .{ 1, 0 }, .{ -1, 0 }, .{ 0, 1 },  .{ 0, -1 },
     .{ 1, 1 }, .{ -1, 1 }, .{ 1, -1 }, .{ -1, -1 },
@@ -184,8 +192,8 @@ fn computeValidSquares(b: Board, col: Color) u64 {
                 var p: V2i = .{ @intCast(x), @intCast(y) };
                 var has_oppo = false;
                 while (true) {
-                    p += d;
-                    if (@reduce(.Or, @min(@max(p, V2i{ 0, 0 }), V2i{ 7, 7 }) != p)) continue :loop;
+                    p = add(p, d);
+                    if (!inBounds(p, V2i{ 0, 0 }, V2i{ 7, 7 })) continue :loop;
                     const sq = b.get(p[0], p[1]);
                     if (sq == .empty) continue :loop;
                     if (sq == col and !has_oppo) continue :loop;
@@ -213,8 +221,8 @@ fn play(b: Board, p: V2i, col: Color) !Board {
     loop: for (compass_dirs) |d| {
         var p1 = p;
         while (true) {
-            p1 += d;
-            if (@reduce(.Or, @min(@max(p1, V2i{ 0, 0 }), V2i{ 7, 7 }) != p1)) continue :loop;
+            p1 = add(p1, d);
+            if (!inBounds(p1, V2i{ 0, 0 }, V2i{ 7, 7 })) continue :loop;
             const sq = b.get(p1[0], p1[1]);
             if (sq == .empty) continue :loop;
             if (sq == col) break;
@@ -222,8 +230,8 @@ fn play(b: Board, p: V2i, col: Color) !Board {
 
         p1 = p;
         while (true) {
-            p1 += d;
-            assert(@reduce(.Or, @min(@max(p1, V2i{ 0, 0 }), V2i{ 7, 7 }) == p1));
+            p1 = add(p1, d);
+            assert(inBounds(p1, V2i{ 0, 0 }, V2i{ 7, 7 }));
             const sq = b.get(p1[0], p1[1]);
             assert(sq != .empty);
             if (sq == col) continue :loop;
