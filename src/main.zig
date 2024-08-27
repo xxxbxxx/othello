@@ -51,7 +51,7 @@ pub fn main() anyerror!void {
         if (!game_over) {
             const can_play = othello.computeValidSquares(board, nextcol) != 0;
             if (!can_play) {
-                nextcol = if (nextcol == .white) .black else .white;
+                nextcol = nextcol.next();
                 if (othello.computeValidSquares(board, nextcol) == 0)
                     game_over = true;
             }
@@ -77,7 +77,7 @@ pub fn main() anyerror!void {
 
         if (clicked_square) |sq| play: {
             board = othello.playAt(board, sq, nextcol) catch break :play;
-            nextcol = if (nextcol == .white) .black else .white;
+            nextcol = nextcol.next();
         }
 
         // Draw

@@ -15,7 +15,18 @@ pub fn bitmask(x: anytype, y: anytype) u64 {
     return @as(u64, 1) << @intCast(y * 8 + x);
 }
 
-pub const Color = enum { empty, black, white };
+pub const Color = enum {
+    empty,
+    black,
+    white,
+    pub fn next(c: Color) Color {
+        return switch (c) {
+            .empty => .empty,
+            .black => .white,
+            .white => .black,
+        };
+    }
+};
 pub const Board = struct {
     occupied: u64,
     color: u64,
@@ -132,6 +143,9 @@ pub const Engine = enum(i32) {
     none,
     random,
     greedy,
+    one_step,
+    two_steps,
+    five_steps,
 };
 
 pub fn computeBestMove(engine: Engine, b: Board, col: Color, alloc: std.mem.Allocator, random: std.Random) Coord {
@@ -139,7 +153,10 @@ pub fn computeBestMove(engine: Engine, b: Board, col: Color, alloc: std.mem.Allo
     return switch (engine) {
         .none => unreachable,
         .random => computeRandomMove(b, col, random),
-        .greedy => computeGreedyMove(b, col, random),
+        .greedy => computeGreedyMove(b, col, random).?.coord,
+        .one_step => computeStepBestMove(b, col, random, 1).?.coord,
+        .two_steps => computeStepBestMove(b, col, random, 2).?.coord,
+        .five_steps => computeStepBestMove(b, col, random, 5).?.coord,
     };
 }
 
@@ -153,7 +170,15 @@ fn computeRandomMove(b: Board, col: Color, random: std.Random) Coord {
     }
 }
 
-fn computeGreedyMove(b: Board, col: Color, random: std.Random) Coord {
+fn evaluation(b: Board, col: Color) i32 {
+    const score = computeScore(b);
+    const nb0: i64 = if (col == .white) score.whites else score.blacks;
+    const nb1: i64 = if (col == .black) score.whites else score.blacks;
+    const delta: i32 = @intCast(nb0 - nb1);
+    return delta;
+}
+
+fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: Coord, score: i32 } {
     const valids = computeValidSquares(b, col);
 
     var best: ?Coord = null;
@@ -165,10 +190,7 @@ fn computeGreedyMove(b: Board, col: Color, random: std.Random) Coord {
 
             const coord: Coord = .{ @intCast(x), @intCast(y) };
             const after = playAt(b, coord, col) catch unreachable;
-            const score = computeScore(after);
-            const nb0: i64 = if (col == .white) score.whites else score.blacks;
-            const nb1: i64 = if (col == .black) score.whites else score.blacks;
-            const delta: i32 = @intCast(nb0 - nb1);
+            const delta = evaluation(after, col);
             if (best_score < delta or best == null) {
                 best = coord;
                 best_score = delta;
@@ -178,5 +200,44 @@ fn computeGreedyMove(b: Board, col: Color, random: std.Random) Coord {
             }
         }
     }
-    return best.?;
+    return if (best) |coord| .{ .coord = coord, .score = best_score } else null;
+}
+
+fn computeStepBestMove(b: Board, col: Color, random: std.Random, lookahead: u32) ?struct { coord: Coord, score: i32 } {
+    const valids = computeValidSquares(b, col);
+
+    var best: ?Coord = null;
+    var best_score: i32 = 0;
+    for (0..8) |y| {
+        for (0..8) |x| {
+            const bit = bitmask(x, y);
+            if (valids & bit == 0) continue;
+
+            const coord: Coord = .{ @intCast(x), @intCast(y) };
+            const after = playAt(b, coord, col) catch unreachable;
+
+            const expected: i32 = score: {
+                switch (lookahead) {
+                    0 => {},
+                    1 => {
+                        if (computeGreedyMove(after, col.next(), random)) |res|
+                            break :score -res.score;
+                    },
+                    else => {
+                        if (computeStepBestMove(after, col.next(), random, lookahead - 1)) |res|
+                            break :score -res.score;
+                    },
+                }
+                break :score evaluation(after, col);
+            };
+            if (best_score < expected or best == null) {
+                best = coord;
+                best_score = expected;
+            } else if (best_score == expected and random.boolean()) {
+                best = coord;
+                best_score = expected;
+            }
+        }
+    }
+    return if (best) |coord| .{ .coord = coord, .score = best_score } else null;
 }
