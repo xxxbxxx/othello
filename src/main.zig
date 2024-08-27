@@ -256,3 +256,31 @@ test "multi steps" {
     try std.testing.expectEqual(@as(u32, 57), score.whites);
     try std.testing.expectEqual(@as(u32, 4), score.blacks);
 }
+
+test "fuzz" {
+    const input_bytes = std.testing.fuzzInput(.{});
+    var input_idx: usize = 0;
+    var board: othello.Board = othello.init_board;
+    var nextcol: othello.Color = .black;
+
+    var game_over = false;
+    loop: while (!game_over) {
+        const pos: othello.Coord = pos: {
+            if (input_idx >= input_bytes.len) break :loop;
+            const byte = input_bytes[input_idx];
+            input_idx += 1;
+            break :pos .{ @intCast(byte % 8), @intCast((byte / 8) % 8) };
+        };
+        board = othello.playAt(board, pos, nextcol) catch break;
+        nextcol = nextcol.next();
+
+        const can_play = othello.computeValidSquares(board, nextcol) != 0;
+        if (!can_play) {
+            nextcol = nextcol.next();
+            if (othello.computeValidSquares(board, nextcol) == 0)
+                game_over = true;
+        }
+    }
+
+    try std.testing.expect(!game_over);
+}
