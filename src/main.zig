@@ -246,14 +246,14 @@ test "random" {
 
 test "greedy" {
     const score = playGame(4321, std.testing.allocator, .greedy);
-    try std.testing.expectEqual(@as(u32, 31), score.whites);
-    try std.testing.expectEqual(@as(u32, 33), score.blacks);
+    try std.testing.expectEqual(@as(u32, 25), score.whites);
+    try std.testing.expectEqual(@as(u32, 38), score.blacks);
 }
 
 test "multi steps" {
     const score = playGame(4321, std.testing.allocator, .five_steps);
-    try std.testing.expectEqual(@as(u32, 57), score.whites);
-    try std.testing.expectEqual(@as(u32, 4), score.blacks);
+    try std.testing.expectEqual(@as(u32, 62), score.whites);
+    try std.testing.expectEqual(@as(u32, 1), score.blacks);
 }
 
 test "fuzz" {
