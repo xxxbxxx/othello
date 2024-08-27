@@ -32,15 +32,25 @@ pub fn main() anyerror!void {
     rl.setTargetFPS(10); // Set our game to run at 60 frames-per-second
     //--------------------------------------------------------------------------------------
 
-    const main_board_pos: Vec2 = .{ .x = 20, .y = 20 };
-    const main_board_size: f32 = 640;
+    // game state
+    const State = struct {
+        board: othello.Board,
+        nextcol: othello.Color,
+    };
+    const init_state: State = .{ .board = othello.init_board, .nextcol = .black };
 
-    var board = othello.init_board;
-    var nextcol: othello.Color = .black;
-    var showhelpers = true;
+    var history = std.ArrayList(State).init(gpa.allocator());
+    defer history.deinit();
+
+    var game_state = init_state;
+    try history.append(game_state);
+
+    // ui state
+    const gui_board_pos: Vec2 = .{ .x = 20, .y = 20 };
+    const gui_board_size: f32 = 640;
     var game_over = false;
+    var showhelpers = true;
     var ai_engine = [_]othello.Engine{ undefined, .greedy, .none };
-
     var gui_dropdowns_states = [_]bool{ false, false };
 
     // Main game loop
@@ -48,36 +58,38 @@ pub fn main() anyerror!void {
         _ = frame_arena.reset(.retain_capacity);
         const frame_alloc = frame_arena.allocator();
 
-        if (!game_over) {
-            const can_play = othello.computeValidSquares(board, nextcol) != 0;
-            if (!can_play) {
-                nextcol = nextcol.next();
-                if (othello.computeValidSquares(board, nextcol) == 0)
-                    game_over = true;
-            }
-        }
-
         const clicked_square: ?othello.Coord = sq: {
             if (game_over) break :sq null;
-            const engine = ai_engine[@intFromEnum(nextcol)];
+            const engine = ai_engine[@intFromEnum(game_state.nextcol)];
             if (engine == .none) {
                 if (rl.isMouseButtonPressed(rl.MouseButton.mouse_button_left)) {
                     const p = Vec2.multiply(
-                        Vec2.subtract(rl.getMousePosition(), main_board_pos),
-                        .{ .x = 8.0 / main_board_size, .y = 8.0 / main_board_size },
+                        Vec2.subtract(rl.getMousePosition(), gui_board_pos),
+                        .{ .x = 8.0 / gui_board_size, .y = 8.0 / gui_board_size },
                     );
                     if (p.x >= 0 and p.x < 8 and p.y >= 0 and p.y < 8)
                         break :sq .{ @intFromFloat(p.x), @intFromFloat(p.y) };
                 }
                 break :sq null;
             } else {
-                break :sq othello.computeBestMove(engine, board, nextcol, frame_alloc, random);
+                break :sq othello.computeBestMove(engine, game_state.board, game_state.nextcol, frame_alloc, random);
             }
         };
 
         if (clicked_square) |sq| play: {
-            board = othello.playAt(board, sq, nextcol) catch break :play;
-            nextcol = nextcol.next();
+            game_state.board = othello.playAt(game_state.board, sq, game_state.nextcol) catch break :play;
+            game_state.nextcol = game_state.nextcol.next();
+
+            if (!game_over) {
+                const can_play = othello.computeValidSquares(game_state.board, game_state.nextcol) != 0;
+                if (!can_play) {
+                    game_state.nextcol = game_state.nextcol.next();
+                    if (othello.computeValidSquares(game_state.board, game_state.nextcol) == 0)
+                        game_over = true;
+                }
+            }
+
+            try history.append(game_state);
         }
 
         // Draw
@@ -86,17 +98,31 @@ pub fn main() anyerror!void {
         defer rl.endDrawing();
 
         rl.clearBackground(rl.Color.init(0, 33, 66, 255));
-        drawBoard(board, main_board_pos, main_board_size);
+        drawBoard(game_state.board, gui_board_pos, gui_board_size);
         if (showhelpers)
-            drawHelper(board, nextcol, main_board_pos, main_board_size);
+            drawHelper(game_state.board, game_state.nextcol, gui_board_pos, gui_board_size);
 
         rl.drawText("Next: ", 700, 50, 30, rl.Color.light_gray);
         if (!game_over)
-            drawPawn(.{ .x = 815, .y = 65 }, 20, nextcol);
+            drawPawn(.{ .x = 815, .y = 65 }, 20, game_state.nextcol);
 
-        const score = othello.computeScore(board);
+        const score = othello.computeScore(game_state.board);
         const scoretxt = try std.fmt.allocPrintZ(frame_alloc, "Score: {} - {}", .{ score.blacks, score.whites });
         rl.drawText(scoretxt, 700, 100, 30, rl.Color.light_gray);
+
+        if (history.items.len > 2) {
+            if (gui.guiButton(.{ .x = 700, .y = 150, .width = 100, .height = 20 }, "Undo") != 0) {
+                history.items.len -= 2;
+                game_state = history.getLast();
+                game_over = false;
+            }
+        }
+        if (gui.guiButton(.{ .x = 820, .y = 150, .width = 100, .height = 20 }, "Restart") != 0) {
+            game_over = false;
+            game_state = init_state;
+            history.clearRetainingCapacity();
+            try history.append(game_state);
+        }
 
         _ = gui.guiCheckBox(.{ .x = 700, .y = 500, .width = 20, .height = 20 }, "show helpers", &showhelpers);
 
@@ -116,8 +142,9 @@ pub fn main() anyerror!void {
             rl.drawText("Game Over!", 175, 200, 125, rl.Color.light_gray);
             if (gui.guiButton(.{ .x = 400, .y = 350, .width = 100, .height = 50 }, "Restart") != 0) {
                 game_over = false;
-                board = othello.init_board;
-                nextcol = .black;
+                game_state = init_state;
+                history.clearRetainingCapacity();
+                try history.append(game_state);
             }
         }
     }
