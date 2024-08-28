@@ -285,7 +285,16 @@ fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: 
 
 fn computeStepBestMove(b: Board, col: Color, random: ?std.Random, ctx: *Context, lookahead: u32) ?struct { coord: Coord, score: i32 } {
     const valids = computeValidSquares(b, col);
+    if (valids == 0) {
+        const is_main_move = random != null;
+        if (is_main_move) return null;
 
+        const valids2 = computeValidSquares(b, col.next());
+        if (valids2 == 0) return null; // game over, l'adversaire pourra pas jouer non plus.
+        if (computeStepBestMove(b, col.next(), null, ctx, lookahead)) |res| {
+            return .{ .coord = undefined, .score = -res.score };
+        } else return null;
+    }
     var best: ?Coord = null;
     var best_score: i32 = undefined;
     for (0..64) |i| {
