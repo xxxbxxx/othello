@@ -257,8 +257,8 @@ test "greedy" {
 
 test "multi steps" {
     const score = playGame(4321, std.testing.allocator, .five_steps);
-    try std.testing.expectEqual(@as(u32, 62), score.whites);
-    try std.testing.expectEqual(@as(u32, 1), score.blacks);
+    try std.testing.expectEqual(@as(u32, 56), score.whites);
+    try std.testing.expectEqual(@as(u32, 8), score.blacks);
 }
 
 test "fuzz" {

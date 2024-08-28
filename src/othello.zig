@@ -283,33 +283,38 @@ fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: 
     return if (best) |coord| .{ .coord = coord, .score = best_score } else null;
 }
 
-fn computeStepBestMove(b: Board, col: Color, random: std.Random, ctx: *Context, lookahead: u32) ?struct { coord: Coord, score: i32 } {
+fn computeStepBestMove(b: Board, col: Color, random: ?std.Random, ctx: *Context, lookahead: u32) ?struct { coord: Coord, score: i32 } {
     const valids = computeValidSquares(b, col);
 
     var best: ?Coord = null;
-    var best_score: i32 = 0;
-    for (0..8) |y| {
-        for (0..8) |x| {
-            const bit = bitmask(x, y);
-            if (valids & bit == 0) continue;
+    var best_score: i32 = undefined;
+    for (0..64) |i| {
+        const bit = @as(u64, 1) << @intCast(i);
+        if (valids & bit == 0) continue;
 
-            const coord: Coord = .{ @intCast(x), @intCast(y) };
-            const after = playAt(b, coord, col);
+        const coord: Coord = .{ @intCast(i % 8), @intCast(i / 8) };
+        const after = playAt(b, coord, col);
 
-            const expected: i32 = score: {
-                if (ctx.dico.get(after)) |v| break :score v;
-                if (lookahead > 0) {
-                    if (computeStepBestMove(after, col.next(), random, ctx, lookahead - 1)) |res|
-                        break :score -res.score;
-                }
-                break :score evaluation(after, col);
-            };
-            ctx.dico.put(after, expected) catch unreachable;
-
-            if (best == null or best_score < expected or (best_score == expected and random.boolean())) {
-                best = coord;
-                best_score = expected;
+        const expected: i32 = score: {
+            if (ctx.dico.get(after)) |v| break :score v;
+            if (lookahead > 0) {
+                if (computeStepBestMove(after, col.next(), null, ctx, lookahead - 1)) |res|
+                    break :score -res.score;
             }
+            break :score evaluation(after, col);
+        };
+        ctx.dico.put(after, expected) catch unreachable;
+
+        if (best != null and best_score == expected) {
+            // choix aléatoire en cas d'égalité (juste pour l'appel initial, pas les exploration récursives)
+            if (random) |rnd| {
+                if (rnd.boolean())
+                    best = null;
+            }
+        }
+        if (best == null or best_score < expected) {
+            best = coord;
+            best_score = expected;
         }
     }
     return if (best) |coord| .{ .coord = coord, .score = best_score } else null;
