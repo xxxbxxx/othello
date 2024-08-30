@@ -161,26 +161,20 @@ pub const Engine = enum(i32) {
     none,
     random,
     greedy,
-    two_steps,
-    five_steps,
+    small_lookahead,
+    large_lookahead,
 };
-
-const Context = struct {
-    dico: std.AutoHashMap(Board, i32),
-};
+const INF: i32 = std.math.maxInt(i32);
 
 pub fn computeBestMove(engine: Engine, b: Board, col: Color, alloc: std.mem.Allocator, random: std.Random) Coord {
-    var ctx: Context = .{
-        .dico = std.AutoHashMap(Board, i32).init(alloc),
-    };
-    defer ctx.dico.deinit();
+    _ = alloc;
 
     return switch (engine) {
         .none => unreachable,
         .random => computeRandomMove(b, col, random),
         .greedy => computeGreedyMove(b, col, random).?.coord,
-        .two_steps => computeStepBestMove(b, col, random, &ctx, 2).?.coord,
-        .five_steps => computeStepBestMove(b, col, random, &ctx, 5).?.coord,
+        .small_lookahead => computeStepBestMove(b, col, random, 2, true, -INF, INF).coord.?,
+        .large_lookahead => computeStepBestMove(b, col, random, 6, true, -INF, INF).coord.?,
     };
 }
 
@@ -203,20 +197,26 @@ const EvalWeights = struct {
     mobility: i32 = 50,
     stability: i32 = 200,
     endgame_piece_diff: i32 = 200,
+
+    const finish: EvalWeights = .{
+        .piece_diff = 100000,
+        .corner_occupancy = 0,
+        .corner_closeness = 0,
+        .mobility = 0,
+        .stability = 0,
+        .endgame_piece_diff = 0,
+    };
 };
 
-const weights = EvalWeights{};
-
-fn evaluation(b: Board, col: Color) i32 {
+fn evaluation(b: Board, col: Color, weights: EvalWeights) i32 {
     const own = if (col == .white) b.white else b.black;
     const opp = if (col == .white) b.black else b.white;
 
-    const score = computeScore(b);
-    const nb0: i32 = if (col == .white) @intCast(score.whites) else @intCast(score.blacks);
-    const nb1: i32 = if (col == .black) @intCast(score.whites) else @intCast(score.blacks);
-    const nbempty: i32 = @intCast(64 - (score.whites + score.blacks));
+    const own_count: i32 = @intCast(@popCount(own));
+    const opp_count: i32 = @intCast(@popCount(opp));
+    const empty_count: i32 = @intCast(64 - (own_count + opp_count));
 
-    var eval: i32 = (nb0 - nb1) * weights.piece_diff;
+    var eval: i32 = (own_count - opp_count) * weights.piece_diff;
 
     // Occupation des coins
     const corner_occupancy: i32 = blk: {
@@ -254,8 +254,8 @@ fn evaluation(b: Board, col: Color) i32 {
     eval += stability * weights.stability;
 
     // Considérations de fin de partie
-    if (nbempty < 10) {
-        eval += (nb0 - nb1) * weights.endgame_piece_diff;
+    if (empty_count < 10) {
+        eval += (own_count - opp_count) * weights.endgame_piece_diff;
     }
 
     return eval;
@@ -273,7 +273,7 @@ fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: 
 
             const coord: Coord = .{ @intCast(x), @intCast(y) };
             const after = playAt(b, coord, col);
-            const delta = evaluation(after, col);
+            const delta = evaluation(after, col, .{});
             if (best == null or best_score < delta or (best_score == delta and random.boolean())) {
                 best = coord;
                 best_score = delta;
@@ -283,20 +283,22 @@ fn computeGreedyMove(b: Board, col: Color, random: std.Random) ?struct { coord: 
     return if (best) |coord| .{ .coord = coord, .score = best_score } else null;
 }
 
-fn computeStepBestMove(b: Board, col: Color, random: ?std.Random, ctx: *Context, lookahead: u32) ?struct { coord: Coord, score: i32 } {
+// négamax avec élagage αβ
+fn computeStepBestMove(b: Board, col: Color, random: ?std.Random, lookahead: u32, comptime prune: bool, alpha: i32, beta: i32) struct { coord: ?Coord, eval: i32 } {
     const valids = computeValidSquares(b, col);
     if (valids == 0) {
-        const is_main_move = random != null;
-        if (is_main_move) return null;
-
-        const valids2 = computeValidSquares(b, col.next());
-        if (valids2 == 0) return null; // game over, l'adversaire pourra pas jouer non plus.
-        if (computeStepBestMove(b, col.next(), null, ctx, lookahead)) |res| {
-            return .{ .coord = undefined, .score = -res.score };
-        } else return null;
+        const valids_opp = computeValidSquares(b, col.next());
+        if (valids_opp == 0) {
+            // game over, l'adversaire pourra pas jouer non plus.
+            return .{ .coord = null, .eval = evaluation(b, col, EvalWeights.finish) };
+        }
+        const res = computeStepBestMove(b, col.next(), null, lookahead, prune, -beta, -alpha);
+        return .{ .coord = null, .eval = -res.eval };
     }
-    var best: ?Coord = null;
-    var best_score: i32 = undefined;
+
+    var current_alpha = alpha;
+    var best_coord: ?Coord = null;
+    var best: i32 = undefined;
     for (0..64) |i| {
         const bit = @as(u64, 1) << @intCast(i);
         if (valids & bit == 0) continue;
@@ -304,29 +306,53 @@ fn computeStepBestMove(b: Board, col: Color, random: ?std.Random, ctx: *Context,
         const coord: Coord = .{ @intCast(i % 8), @intCast(i / 8) };
         const after = playAt(b, coord, col);
 
-        const expected: i32 = score: {
-            if (ctx.dico.get(after)) |v| break :score v;
+        const eval: i32 = score: {
             if (lookahead > 0) {
-                if (computeStepBestMove(after, col.next(), null, ctx, lookahead - 1)) |res|
-                    break :score -res.score;
+                const res = computeStepBestMove(after, col.next(), null, lookahead - 1, prune, -beta, -current_alpha);
+                break :score -res.eval;
             }
-            break :score evaluation(after, col);
+            break :score evaluation(after, col, .{});
         };
-        ctx.dico.put(after, expected) catch unreachable;
 
-        if (best != null and best_score == expected) {
+        if (best_coord != null and best == eval) {
             // choix aléatoire en cas d'égalité (juste pour l'appel initial, pas les exploration récursives)
             if (random) |rnd| {
                 if (rnd.boolean())
-                    best = null;
+                    best_coord = null;
             }
         }
-        if (best == null or best_score < expected) {
-            best = coord;
-            best_score = expected;
+        if (best_coord == null or best < eval) {
+            best_coord = coord;
+            best = eval;
         }
+        current_alpha = @max(eval, current_alpha);
+        if (prune and current_alpha >= beta)
+            break;
     }
-    return if (best) |coord| .{ .coord = coord, .score = best_score } else null;
+
+    return .{ .coord = best_coord.?, .eval = best };
+}
+
+pub fn computeEval(b: Board, col: Color, lookahead: u32) [64]i32 {
+    const valids = computeValidSquares(b, col);
+    if (valids == 0) {
+        return [1]i32{0} ** 64;
+    }
+
+    const baseline = evaluation(b, col, .{});
+    var evals = [1]i32{0} ** 64;
+    for (0..64) |i| {
+        const bit = @as(u64, 1) << @intCast(i);
+        if (valids & bit == 0) continue;
+
+        const coord: Coord = .{ @intCast(i % 8), @intCast(i / 8) };
+        const after = playAt(b, coord, col);
+
+        const new_eval = if (lookahead > 0) -computeStepBestMove(after, col.next(), null, lookahead - 1, true, -INF, INF).eval else evaluation(after, col, .{});
+        evals[i] = new_eval - baseline;
+    }
+
+    return evals;
 }
 
 // ================================================================
@@ -442,6 +468,16 @@ test "computeValidSquares" {
     }
 }
 
+test "pruning" {
+    const b = Board{ .white = 15699526974273773319, .black = 2449958358421798936 };
+
+    //std.debug.print("===========\n", .{});
+    const new_w = computeStepBestMove(b, .white, null, 3, true, -INF, INF);
+    //std.debug.print("===========\n", .{});
+    const old_w = computeStepBestMove(b, .white, null, 3, false, -INF, INF);
+    try std.testing.expectEqual(old_w, new_w);
+}
+
 test "computeValidSquares fuzz" {
     const input_bytes = std.testing.fuzzInput(.{});
     if (input_bytes.len != 16) return;
@@ -466,11 +502,35 @@ test "playAt fuzz" {
     p[0] &= 0x7;
     p[1] &= 0x7;
 
-    const new_w = playAt(b, p, .white);
-    const old_w = playAtRef(b, p, .white);
+    if (computeValidSquares(b, .white) & bitmask(p[0], p[1]) != 0) {
+        const new_w = playAt(b, p, .white);
+        const old_w = playAtRef(b, p, .white);
+        try std.testing.expectEqual(old_w, new_w);
+    }
+
+    if (computeValidSquares(b, .black) & bitmask(p[0], p[1]) != 0) {
+        const new_b = playAt(b, p, .black);
+        const old_b = playAtRef(b, p, .black);
+        try std.testing.expectEqual(old_b, new_b);
+    }
+}
+
+test "pruning fuzz" {
+    const input_bytes = std.testing.fuzzInput(.{});
+    if (input_bytes.len != 16) return;
+    var b: Board = std.mem.bytesAsValue(Board, input_bytes[0..16]).*;
+    b.black &= ~b.white; // cleanup data
+
+    const depth = 3;
+
+    const new_w = computeStepBestMove(b, .white, null, depth, true, -INF, INF);
+    const old_w = computeStepBestMove(b, .white, null, depth, false, -INF, INF);
+    if (new_w.eval != old_w.eval) {
+        std.debug.print("{} -> {} != {}\n", .{ b, old_w, new_w });
+    }
     try std.testing.expectEqual(old_w, new_w);
 
-    const new_b = playAt(b, p, .black);
-    const old_b = playAtRef(b, p, .black);
+    const new_b = computeStepBestMove(b, .black, null, depth, true, -INF, INF);
+    const old_b = computeStepBestMove(b, .black, null, depth, false, -INF, INF);
     try std.testing.expectEqual(old_b, new_b);
 }

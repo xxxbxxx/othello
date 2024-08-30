@@ -44,11 +44,15 @@ pub fn main() anyerror!void {
     var game_state = init_state;
     try history.append(game_state);
 
+    var helper_state: HelperState = undefined;
+    updateHelper(game_state.board, game_state.nextcol, 1, &helper_state);
+
     // ui state
     const gui_board_pos: Vec2 = .{ .x = 20, .y = 20 };
     const gui_board_size: f32 = 640;
     var game_over = false;
     var showhelpers = true;
+    var helper_lookahead: f32 = 1;
     var ai_engine = [_]othello.Engine{ undefined, .greedy, .none };
     var gui_dropdowns_states = [_]bool{ false, false };
 
@@ -89,6 +93,8 @@ pub fn main() anyerror!void {
                 }
             }
 
+            updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
+
             try history.append(game_state);
         }
 
@@ -100,7 +106,7 @@ pub fn main() anyerror!void {
         rl.clearBackground(rl.Color.init(0, 33, 66, 255));
         drawBoard(game_state.board, gui_board_pos, gui_board_size);
         if (showhelpers)
-            drawHelper(game_state.board, game_state.nextcol, gui_board_pos, gui_board_size);
+            drawHelper(&helper_state, gui_board_pos, gui_board_size);
 
         rl.drawText("Next: ", 700, 50, 30, rl.Color.light_gray);
         if (!game_over)
@@ -115,16 +121,22 @@ pub fn main() anyerror!void {
                 history.items.len -= 2;
                 game_state = history.getLast();
                 game_over = false;
+                updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
             }
         }
         if (gui.guiButton(.{ .x = 820, .y = 150, .width = 100, .height = 20 }, "Restart") != 0) {
             game_over = false;
             game_state = init_state;
+            updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
+
             history.clearRetainingCapacity();
             try history.append(game_state);
         }
 
-        _ = gui.guiCheckBox(.{ .x = 700, .y = 500, .width = 20, .height = 20 }, "show helpers", &showhelpers);
+        _ = gui.guiCheckBox(.{ .x = 700, .y = 450, .width = 20, .height = 20 }, "show helpers", &showhelpers);
+        if (gui.guiSlider(.{ .x = 700, .y = 480, .width = 200, .height = 20 }, "none", "max", &helper_lookahead, 1, 10) != 0) {
+            updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
+        }
 
         rl.drawText("Black AI: ", 700, 525, 10, rl.Color.light_gray);
         rl.drawText("White AI: ", 700, 550, 10, rl.Color.light_gray);
@@ -202,14 +214,38 @@ fn drawPawn(pos: Vec2, radius: f32, col: othello.Color) void {
     rl.drawCircleLinesV(pos, radius, rl.Color.black);
 }
 
-fn drawHelper(b: othello.Board, nextcol: othello.Color, pos: Vec2, size: f32) void {
+const HelperState = struct {
+    valids: u64,
+    heuristic: [64]i32,
+    lookahead: [64]i32,
+};
+fn updateHelper(b: othello.Board, nextcol: othello.Color, lookahead: u32, helper_state: *HelperState) void {
+    helper_state.valids = othello.computeValidSquares(b, nextcol);
+    helper_state.heuristic = othello.computeEval(b, nextcol, 0);
+    helper_state.lookahead = othello.computeEval(b, nextcol, @max(1, @min(10, lookahead)));
+}
+
+fn drawHelper(helper_state: *const HelperState, pos: Vec2, size: f32) void {
     const pos0 = Vec2.add(pos, .{ .x = size / 16, .y = size / 16 });
 
-    const valids = othello.computeValidSquares(b, nextcol);
+    const valids = helper_state.valids;
     for (0..8) |y| {
         for (0..8) |x| {
             if (valids & othello.bitmask(x, y) == 0) continue;
             rl.drawCircleLinesV(addmul(pos0, size / 8, .{ .x = @floatFromInt(x), .y = @floatFromInt(y) }), size / 20, rl.Color.red);
+        }
+    }
+
+    for (0..8) |y| {
+        for (0..8) |x| {
+            if (valids & othello.bitmask(x, y) == 0) continue;
+
+            const p = addmul(pos0, size / 8, .{ .x = @as(f32, @floatFromInt(x)) - 0.45, .y = @floatFromInt(y) });
+            const ev0 = helper_state.heuristic[x + y * 8];
+            const ev1 = helper_state.lookahead[x + y * 8];
+            var buf: [16]u8 = undefined;
+            const txt = std.fmt.bufPrintZ(&buf, "{}/{}", .{ ev0, ev1 }) catch "ERR";
+            rl.drawText(txt, @intFromFloat(p.x), @intFromFloat(p.y), 16, if (ev0 > 0) rl.Color.yellow else rl.Color.red);
         }
     }
 }
@@ -257,8 +293,8 @@ test "greedy" {
 
 test "multi steps" {
     const score = playGame(4321, std.testing.allocator, .five_steps);
-    try std.testing.expectEqual(@as(u32, 56), score.whites);
-    try std.testing.expectEqual(@as(u32, 8), score.blacks);
+    try std.testing.expectEqual(@as(u32, 60), score.whites);
+    try std.testing.expectEqual(@as(u32, 4), score.blacks);
 }
 
 test "fuzz" {
