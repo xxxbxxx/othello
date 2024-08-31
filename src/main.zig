@@ -241,8 +241,8 @@ const HelperState = struct {
 fn updateHelper(b: othello.Board, nextcol: othello.Color, lookahead: u32, helper_state: *HelperState) void {
     if (!helper_state.dirty) return;
     helper_state.valids = othello.computeValidSquares(b, nextcol);
-    helper_state.heuristic = othello.computeEval(b, nextcol, 0);
-    helper_state.lookahead = othello.computeEval(b, nextcol, @max(0, @min(10, lookahead)));
+    helper_state.heuristic = othello.computeMovesEval(b, nextcol, 0);
+    helper_state.lookahead = othello.computeMovesEval(b, nextcol, @max(0, @min(10, lookahead)));
     helper_state.dirty = false;
 }
 
@@ -275,7 +275,7 @@ fn drawHelper(helper_state: *const HelperState, pos: Vec2, size: f32) void {
 // tests
 
 fn playGame(seed: u32, alloc: std.mem.Allocator, engine: othello.Engine) othello.Score {
-    var prng = std.Random.DefaultPrng.init(seed); //std.testing.random_seed);
+    var prng = std.Random.DefaultPrng.init(seed);
     const random = prng.random();
 
     var board: othello.Board = othello.init_board;
@@ -317,6 +317,12 @@ test "multi steps" {
     const score = playGame(4321, std.testing.allocator, .large_lookahead);
     try std.testing.expectEqual(@as(u32, 48), score.whites);
     try std.testing.expectEqual(@as(u32, 16), score.blacks);
+}
+
+test "mcst" {
+    const score = playGame(4321, std.testing.allocator, .mcts);
+    try std.testing.expectEqual(@as(u32, 57), score.whites);
+    try std.testing.expectEqual(@as(u32, 7), score.blacks);
 }
 
 test "fuzz" {

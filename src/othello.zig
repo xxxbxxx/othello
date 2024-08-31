@@ -156,6 +156,28 @@ pub fn computeScore(b: Board) Score {
     };
 }
 
+pub fn computeMovesEval(b: Board, col: Color, lookahead: u32) [64]i32 {
+    const valids = computeValidSquares(b, col);
+    if (valids == 0) {
+        return [1]i32{0} ** 64;
+    }
+
+    const baseline = evaluate(b, col, .{});
+    var evals = [1]i32{0} ** 64;
+    for (0..64) |i| {
+        const bit = @as(u64, 1) << @intCast(i);
+        if (valids & bit == 0) continue;
+
+        const coord: Coord = .{ @intCast(i % 8), @intCast(i / 8) };
+        const after = playAt(b, coord, col);
+
+        const new_eval = if (lookahead > 0) -computeRecursiveBestMove(after, col.next(), false, null, lookahead - 1, true, -INF, INF).eval else evaluate(after, col, .{});
+        evals[i] = new_eval - baseline;
+    }
+
+    return evals;
+}
+
 // bon pas d'état persistant pour l'instant
 pub const Engine = enum(i32) {
     none,
@@ -171,17 +193,17 @@ const INF: i32 = std.math.maxInt(i32);
 pub fn computeBestMove(engine: Engine, b: Board, col: Color, alloc: std.mem.Allocator, random: std.Random) Coord {
     return switch (engine) {
         .none => unreachable,
-        .random => computeRandomMove(b, col, random),
+        .random => computeRandomMove(b, col, random).?,
         .greedy => computeGreedyMove(b, col, random).coord.?,
-        .small_lookahead => computeStepBestMove(b, col, false, random, 2, true, -INF, INF).coord.?,
-        .large_lookahead => computeStepBestMove(b, col, false, random, 6, true, -INF, INF).coord.?,
-        .mcts => mcts(b, col, 10000, alloc),
+        .small_lookahead => computeRecursiveBestMove(b, col, false, random, 2, true, -INF, INF).coord.?,
+        .large_lookahead => computeRecursiveBestMove(b, col, false, random, 6, true, -INF, INF).coord.?,
+        .mcts => MCTS.computeBestMove(b, col, 10_000, alloc, random),
     };
 }
 
-fn computeRandomMove(b: Board, col: Color, random: std.Random) Coord {
+fn computeRandomMove(b: Board, col: Color, random: std.Random) ?Coord {
     const valids = computeValidSquares(b, col);
-    assert(valids != 0);
+    if (valids == 0) return null;
 
     while (true) {
         const index = random.intRangeAtMost(u6, 0, 63);
@@ -192,15 +214,15 @@ fn computeRandomMove(b: Board, col: Color, random: std.Random) Coord {
 }
 
 const EvalWeights = struct {
-    piece_diff: i32 = 100,
-    corner_occupancy: i32 = 1000,
-    corner_closeness: i32 = 500,
-    mobility: i32 = 50,
-    stability: i32 = 200,
-    endgame_piece_diff: i32 = 200,
+    piece_diff: i32 = 10,
+    corner_occupancy: i32 = 100,
+    corner_closeness: i32 = 50,
+    mobility: i32 = 5,
+    stability: i32 = 20,
+    endgame_piece_diff: i32 = 20,
 
     const finish: EvalWeights = .{
-        .piece_diff = 100000,
+        .piece_diff = 1000,
         .corner_occupancy = 0,
         .corner_closeness = 0,
         .mobility = 0,
@@ -209,7 +231,7 @@ const EvalWeights = struct {
     };
 };
 
-fn evaluation(b: Board, col: Color, weights: EvalWeights) i32 {
+fn evaluate(b: Board, col: Color, weights: EvalWeights) i32 {
     const own = if (col == .white) b.white else b.black;
     const opp = if (col == .white) b.black else b.white;
 
@@ -265,7 +287,7 @@ fn evaluation(b: Board, col: Color, weights: EvalWeights) i32 {
 fn computeGreedyMove(b: Board, col: Color, random: ?std.Random) struct { coord: ?Coord, eval: i32 } {
     const valids = computeValidSquares(b, col);
     if (valids == 0)
-        return .{ .coord = null, .eval = evaluation(b, col, .{}) };
+        return .{ .coord = null, .eval = evaluate(b, col, .{}) };
 
     var best_coord: ?Coord = null;
     var best_eval: i32 = undefined;
@@ -276,7 +298,7 @@ fn computeGreedyMove(b: Board, col: Color, random: ?std.Random) struct { coord: 
 
             const coord: Coord = .{ @intCast(x), @intCast(y) };
             const after = playAt(b, coord, col);
-            const eval = evaluation(after, col, .{});
+            const eval = evaluate(after, col, .{});
 
             if (best_coord != null and best_eval == eval) {
                 if (random) |rnd| {
@@ -293,14 +315,17 @@ fn computeGreedyMove(b: Board, col: Color, random: ?std.Random) struct { coord: 
     return .{ .coord = best_coord.?, .eval = best_eval };
 }
 
+// ================================================================
 // négamax avec élagage αβ
-fn computeStepBestMove(b: Board, col: Color, skipped: bool, random: ?std.Random, lookahead: u32, comptime prune: bool, alpha: i32, beta: i32) struct { coord: ?Coord, eval: i32 } {
+// ================================================================
+
+fn computeRecursiveBestMove(b: Board, col: Color, skipped: bool, random: ?std.Random, lookahead: u32, comptime prune: bool, alpha: i32, beta: i32) struct { coord: ?Coord, eval: i32 } {
     const valids = computeValidSquares(b, col);
     if (valids == 0) {
         if (skipped) { // l'adversaire a aussiskippé son tour -> game over
-            return .{ .coord = null, .eval = evaluation(b, col, EvalWeights.finish) };
+            return .{ .coord = null, .eval = evaluate(b, col, EvalWeights.finish) };
         } else {
-            const res = computeStepBestMove(b, col.next(), true, null, lookahead, prune, -beta, -alpha);
+            const res = computeRecursiveBestMove(b, col.next(), true, null, lookahead, prune, -beta, -alpha);
             return .{ .coord = null, .eval = -res.eval };
         }
     }
@@ -317,10 +342,10 @@ fn computeStepBestMove(b: Board, col: Color, skipped: bool, random: ?std.Random,
 
         const eval: i32 = eval: {
             if (lookahead > 0) {
-                const res = computeStepBestMove(after, col.next(), false, null, lookahead - 1, prune, -beta, -alpha1);
+                const res = computeRecursiveBestMove(after, col.next(), false, null, lookahead - 1, prune, -beta, -alpha1);
                 break :eval -res.eval;
             }
-            break :eval evaluation(after, col, .{});
+            break :eval evaluate(after, col, .{});
         };
 
         if (best_coord != null and best_eval == eval) {
@@ -346,167 +371,144 @@ fn computeStepBestMove(b: Board, col: Color, skipped: bool, random: ?std.Random,
     return .{ .coord = best_coord.?, .eval = best_eval };
 }
 
-pub fn computeEval(b: Board, col: Color, lookahead: u32) [64]i32 {
-    const valids = computeValidSquares(b, col);
-    if (valids == 0) {
-        return [1]i32{0} ** 64;
-    }
-
-    const baseline = evaluation(b, col, .{});
-    var evals = [1]i32{0} ** 64;
-    for (0..64) |i| {
-        const bit = @as(u64, 1) << @intCast(i);
-        if (valids & bit == 0) continue;
-
-        const coord: Coord = .{ @intCast(i % 8), @intCast(i / 8) };
-        const after = playAt(b, coord, col);
-
-        const new_eval = if (lookahead > 0) -computeStepBestMove(after, col.next(), false, null, lookahead - 1, true, -INF, INF).eval else evaluation(after, col, .{});
-        evals[i] = new_eval - baseline;
-    }
-
-    return evals;
-}
-
 // ================================================================
 // monte carlo tree search
 // ================================================================
-const Node = struct {
-    board: Board,
-    color: Color,
-    move: ?Coord,
-    visits: u32,
-    wins: u32,
-    children: std.ArrayList(Node),
 
-    fn init(allocator: std.mem.Allocator, board: Board, color: Color, move: ?Coord) !Node {
-        return Node{
-            .board = board,
-            .color = color,
-            .move = move,
-            .visits = 0,
-            .wins = 0,
-            .children = std.ArrayList(Node).init(allocator),
-        };
+const MCTS = struct {
+    const Node = struct {
+        move: union(enum) {
+            play: Coord,
+            skip: void,
+            endgame: void,
+        },
+        wins: u32 = 0, // nb victoire du parent quand il choisit ce noeud et joue "move"
+        visits: u32 = 0,
+        children: []Node = &.{},
+    };
+
+    // Upper Confidence Bound
+    fn uct(node: *Node, parent_visits: u32) f32 {
+        const c = 1.41; // Exploration parameter  "theoretically equal to √2; in practice usually chosen empirically"
+        if (node.visits == 0) return std.math.inf(f32);
+        const w: f32 = @floatFromInt(node.wins);
+        const n: f32 = @floatFromInt(node.visits);
+        const N: f32 = @floatFromInt(parent_visits);
+        return (w / n) + c * @sqrt(@log(N) / n);
     }
 
-    fn deinit(self: *Node) void {
-        for (self.children.items) |*child| {
-            child.deinit();
-        }
-        self.children.deinit();
-    }
-};
-
-fn uct(node: *Node, parent_visits: u32) f32 {
-    const c = 1.41; // Exploration parameter
-    if (node.visits == 0) return std.math.inf(f32);
-    return (@as(f32, @floatFromInt(node.wins)) / @as(f32, @floatFromInt(node.visits))) +
-        c * @sqrt(@log(@as(f32, @floatFromInt(parent_visits))) / @as(f32, @floatFromInt(node.visits)));
-}
-
-fn select(node: *Node) *Node {
-    var current = node;
-    while (current.children.items.len > 0) {
+    fn getBestChild(node: *Node, visits: u32) *Node {
         var best_child: ?*Node = null;
         var best_uct: f32 = -std.math.inf(f32);
-        for (current.children.items) |*child| {
-            const child_uct = uct(child, current.visits);
+        for (node.children) |*child| {
+            const child_uct = uct(child, visits);
             if (child_uct > best_uct) {
                 best_uct = child_uct;
                 best_child = child;
             }
         }
-        current = best_child.?;
+        return best_child.?;
     }
-    return current;
-}
 
-fn expand(node: *Node, allocator: std.mem.Allocator) !void {
-    const valids = computeValidSquares(node.board, node.color);
+    // complète la feuille avec les coups possibles.
+    fn expandLeaf(node: *Node, board: Board, color: Color, allocator: std.mem.Allocator) !void {
+        assert(node.children.len == 0);
+        const valids = computeValidSquares(board, color);
 
-    for (0..64) |i| {
-        const bit = @as(u64, 1) << @intCast(i);
-        if (valids & bit == 0) continue;
-        const move: Coord = .{ @intCast(i % 8), @intCast(i / 8) };
-        const new_board = playAt(node.board, move, node.color);
-        const child = try Node.init(allocator, new_board, node.color.next(), move);
-        try node.children.append(child);
-    }
-}
-
-fn simulate(board: Board, color: Color) bool {
-    var current_board = board;
-    var current_color = color;
-    var skipped = false;
-
-    while (true) {
-        const valids = computeValidSquares(current_board, current_color);
         if (valids == 0) {
-            if (skipped) break;
-            skipped = true;
+            const nextvalids = computeValidSquares(board, color.next());
+            if (nextvalids == 0) {
+                const new_nodes: [1]Node = .{.{ .move = .endgame }};
+                node.children = try allocator.dupe(Node, &new_nodes);
+                return;
+            }
+
+            const new_nodes: [1]Node = .{.{ .move = .skip }};
+            node.children = try allocator.dupe(Node, &new_nodes);
+            return;
+        }
+
+        var new_nodes: [64]Node = undefined;
+        var index: u32 = 0;
+        for (0..64) |i| {
+            const bit = @as(u64, 1) << @intCast(i);
+            if (valids & bit == 0) continue;
+            new_nodes[index] = .{ .move = .{ .play = .{ @intCast(i % 8), @intCast(i / 8) } } };
+            index += 1;
+        }
+        assert(index > 0);
+        node.children = try allocator.dupe(Node, new_nodes[0..index]);
+    }
+
+    // éhantillonne une fin de partie aléatoire et renvoie qui gagne
+    fn sampleResult(board: Board, color: Color, random: std.Random) Color {
+        var current_board = board;
+        var current_color = color;
+        var skipped = false;
+
+        while (true) {
+            if (computeRandomMove(current_board, current_color, random)) |move| {
+                skipped = false;
+                current_board = playAt(current_board, move, current_color);
+            } else {
+                if (skipped) break;
+                skipped = true;
+            }
             current_color = current_color.next();
-            continue;
         }
-        skipped = false;
 
-        const move = computeRandomMove(current_board, current_color, std.crypto.random);
-        current_board = playAt(current_board, move, current_color);
-        current_color = current_color.next();
+        const score = computeScore(current_board);
+        if (score.whites < score.blacks) return .black;
+        if (score.whites > score.blacks) return .white;
+        return .empty;
     }
 
-    const score = computeScore(current_board);
-    return if (color == .white) score.whites > score.blacks else score.blacks > score.whites;
-}
+    fn recurse(node: *Node, board: Board, color: Color, allocator: std.mem.Allocator, random: std.Random) Color {
+        if (node.visits == 0) {
+            const winner = sampleResult(board, color, random);
+            node.visits += 1;
+            node.wins += @intFromBool(winner != color);
+            return winner;
+        }
 
-fn mctsIteration(node: *Node, allocator: std.mem.Allocator) bool {
-    if (node.visits == 0) {
-        const result = simulate(node.board, node.color);
+        if (node.children.len == 0) {
+            expandLeaf(node, board, color, allocator) catch @panic("OOM");
+        }
+
+        const best_child: *Node = getBestChild(node, node.visits);
+        const winner = switch (best_child.move) {
+            .endgame => sampleResult(board, color, random),
+            .skip => recurse(best_child, board, color.next(), allocator, random),
+            .play => |coord| res: {
+                const new_board = playAt(board, coord, color);
+                break :res recurse(best_child, new_board, color.next(), allocator, random);
+            },
+        };
+
         node.visits += 1;
-        node.wins += if (result) 1 else 0;
-        return result;
+        node.wins += @intFromBool(winner != color);
+        return winner;
     }
 
-    if (node.children.items.len == 0) {
-        expand(node, allocator) catch unreachable;
-    }
+    fn computeBestMove(board: Board, color: Color, iterations: u32, allocator: std.mem.Allocator, random: std.Random) Coord {
+        var nodes_arena = std.heap.ArenaAllocator.init(allocator);
+        defer nodes_arena.deinit();
 
-    var best_child: ?*Node = null;
-    var best_uct: f32 = -std.math.inf(f32);
-    for (node.children.items) |*child| {
-        const child_uct = uct(child, node.visits);
-        if (child_uct > best_uct) {
-            best_uct = child_uct;
-            best_child = child;
+        var root: Node = .{ .move = undefined };
+
+        for (0..iterations) |_| {
+            _ = recurse(&root, board, color, nodes_arena.allocator(), random);
         }
+
+        // std.debug.print("mcts: {}/{}\n", .{ root.wins, root.visits });
+        // for (root.children) |it| {
+        //     std.debug.print("    @{any} -> {}/{}\n", .{ it.move.play, it.wins, it.visits });
+        // }
+
+        const best: *Node = getBestChild(&root, 1);
+        return best.move.play;
     }
-
-    const result = if (best_child) |child| mctsIteration(child, allocator) else simulate(node.board, node.color);
-    node.visits += 1;
-    node.wins += if (result) 1 else 0;
-    return !result; // Invert result for parent
-}
-
-fn mcts(board: Board, color: Color, iterations: u32, allocator: std.mem.Allocator) Coord {
-    var root = Node.init(allocator, board, color, null) catch unreachable;
-    defer root.deinit();
-
-    var i: u32 = 0;
-    while (i < iterations) : (i += 1) {
-        _ = mctsIteration(&root, allocator);
-    }
-
-    var best_child: ?*Node = null;
-    var best_visits: u32 = 0;
-    for (root.children.items) |*child| {
-        if (child.visits > best_visits) {
-            best_visits = child.visits;
-            best_child = child;
-        }
-    }
-
-    return best_child.?.move.?;
-}
+};
 
 // ================================================================
 // Tests
@@ -624,8 +626,8 @@ test "computeValidSquares" {
 test "pruning" {
     const b = Board{ .white = 15699526974273773319, .black = 2449958358421798936 };
 
-    const new_w = computeStepBestMove(b, .white, false, null, 3, true, -INF, INF);
-    const old_w = computeStepBestMove(b, .white, false, null, 3, false, -INF, INF);
+    const new_w = computeRecursiveBestMove(b, .white, false, null, 3, true, -INF, INF);
+    const old_w = computeRecursiveBestMove(b, .white, false, null, 3, false, -INF, INF);
     try std.testing.expectEqual(old_w, new_w);
 }
 
@@ -674,12 +676,12 @@ test "pruning fuzz" {
 
     const depth = 3;
 
-    const new_w = computeStepBestMove(b, .white, false, null, depth, true, -INF, INF);
-    const old_w = computeStepBestMove(b, .white, false, null, depth, false, -INF, INF);
+    const new_w = computeRecursiveBestMove(b, .white, false, null, depth, true, -INF, INF);
+    const old_w = computeRecursiveBestMove(b, .white, false, null, depth, false, -INF, INF);
     try std.testing.expectEqual(old_w, new_w);
 
-    const new_b = computeStepBestMove(b, .black, false, null, depth, true, -INF, INF);
-    const old_b = computeStepBestMove(b, .black, false, null, depth, false, -INF, INF);
+    const new_b = computeRecursiveBestMove(b, .black, false, null, depth, true, -INF, INF);
+    const old_b = computeRecursiveBestMove(b, .black, false, null, depth, false, -INF, INF);
     try std.testing.expectEqual(old_b, new_b);
 }
 
@@ -690,7 +692,7 @@ test "computeStepBestMove cas1" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const best = computeStepBestMove(b, .white, false, random, 6, true, -INF, INF);
+    const best = computeRecursiveBestMove(b, .white, false, random, 6, true, -INF, INF);
     try std.testing.expect(!std.mem.eql(i8, &best.coord.?, &.{ 6, 6 }));
 }
 
@@ -701,6 +703,6 @@ test "computeStepBestMove cas2" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const best = computeStepBestMove(b, .white, false, random, 6, true, -INF, INF);
+    const best = computeRecursiveBestMove(b, .white, false, random, 6, true, -INF, INF);
     try std.testing.expect(!std.mem.eql(i8, &best.coord.?, &.{ 6, 6 }));
 }
