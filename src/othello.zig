@@ -163,18 +163,19 @@ pub const Engine = enum(i32) {
     greedy,
     small_lookahead,
     large_lookahead,
+    mcts,
 };
+
 const INF: i32 = std.math.maxInt(i32);
 
 pub fn computeBestMove(engine: Engine, b: Board, col: Color, alloc: std.mem.Allocator, random: std.Random) Coord {
-    _ = alloc;
-
     return switch (engine) {
         .none => unreachable,
         .random => computeRandomMove(b, col, random),
         .greedy => computeGreedyMove(b, col, random).coord.?,
         .small_lookahead => computeStepBestMove(b, col, false, random, 2, true, -INF, INF).coord.?,
         .large_lookahead => computeStepBestMove(b, col, false, random, 6, true, -INF, INF).coord.?,
+        .mcts => mcts(b, col, 10000, alloc),
     };
 }
 
@@ -365,6 +366,146 @@ pub fn computeEval(b: Board, col: Color, lookahead: u32) [64]i32 {
     }
 
     return evals;
+}
+
+// ================================================================
+// monte carlo tree search
+// ================================================================
+const Node = struct {
+    board: Board,
+    color: Color,
+    move: ?Coord,
+    visits: u32,
+    wins: u32,
+    children: std.ArrayList(Node),
+
+    fn init(allocator: std.mem.Allocator, board: Board, color: Color, move: ?Coord) !Node {
+        return Node{
+            .board = board,
+            .color = color,
+            .move = move,
+            .visits = 0,
+            .wins = 0,
+            .children = std.ArrayList(Node).init(allocator),
+        };
+    }
+
+    fn deinit(self: *Node) void {
+        for (self.children.items) |*child| {
+            child.deinit();
+        }
+        self.children.deinit();
+    }
+};
+
+fn uct(node: *Node, parent_visits: u32) f32 {
+    const c = 1.41; // Exploration parameter
+    if (node.visits == 0) return std.math.inf(f32);
+    return (@as(f32, @floatFromInt(node.wins)) / @as(f32, @floatFromInt(node.visits))) +
+        c * @sqrt(@log(@as(f32, @floatFromInt(parent_visits))) / @as(f32, @floatFromInt(node.visits)));
+}
+
+fn select(node: *Node) *Node {
+    var current = node;
+    while (current.children.items.len > 0) {
+        var best_child: ?*Node = null;
+        var best_uct: f32 = -std.math.inf(f32);
+        for (current.children.items) |*child| {
+            const child_uct = uct(child, current.visits);
+            if (child_uct > best_uct) {
+                best_uct = child_uct;
+                best_child = child;
+            }
+        }
+        current = best_child.?;
+    }
+    return current;
+}
+
+fn expand(node: *Node, allocator: std.mem.Allocator) !void {
+    const valids = computeValidSquares(node.board, node.color);
+
+    for (0..64) |i| {
+        const bit = @as(u64, 1) << @intCast(i);
+        if (valids & bit == 0) continue;
+        const move: Coord = .{ @intCast(i % 8), @intCast(i / 8) };
+        const new_board = playAt(node.board, move, node.color);
+        const child = try Node.init(allocator, new_board, node.color.next(), move);
+        try node.children.append(child);
+    }
+}
+
+fn simulate(board: Board, color: Color) bool {
+    var current_board = board;
+    var current_color = color;
+    var skipped = false;
+
+    while (true) {
+        const valids = computeValidSquares(current_board, current_color);
+        if (valids == 0) {
+            if (skipped) break;
+            skipped = true;
+            current_color = current_color.next();
+            continue;
+        }
+        skipped = false;
+
+        const move = computeRandomMove(current_board, current_color, std.crypto.random);
+        current_board = playAt(current_board, move, current_color);
+        current_color = current_color.next();
+    }
+
+    const score = computeScore(current_board);
+    return if (color == .white) score.whites > score.blacks else score.blacks > score.whites;
+}
+
+fn mctsIteration(node: *Node, allocator: std.mem.Allocator) bool {
+    if (node.visits == 0) {
+        const result = simulate(node.board, node.color);
+        node.visits += 1;
+        node.wins += if (result) 1 else 0;
+        return result;
+    }
+
+    if (node.children.items.len == 0) {
+        expand(node, allocator) catch unreachable;
+    }
+
+    var best_child: ?*Node = null;
+    var best_uct: f32 = -std.math.inf(f32);
+    for (node.children.items) |*child| {
+        const child_uct = uct(child, node.visits);
+        if (child_uct > best_uct) {
+            best_uct = child_uct;
+            best_child = child;
+        }
+    }
+
+    const result = if (best_child) |child| mctsIteration(child, allocator) else simulate(node.board, node.color);
+    node.visits += 1;
+    node.wins += if (result) 1 else 0;
+    return !result; // Invert result for parent
+}
+
+fn mcts(board: Board, color: Color, iterations: u32, allocator: std.mem.Allocator) Coord {
+    var root = Node.init(allocator, board, color, null) catch unreachable;
+    defer root.deinit();
+
+    var i: u32 = 0;
+    while (i < iterations) : (i += 1) {
+        _ = mctsIteration(&root, allocator);
+    }
+
+    var best_child: ?*Node = null;
+    var best_visits: u32 = 0;
+    for (root.children.items) |*child| {
+        if (child.visits > best_visits) {
+            best_visits = child.visits;
+            best_child = child;
+        }
+    }
+
+    return best_child.?.move.?;
 }
 
 // ================================================================
