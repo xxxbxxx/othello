@@ -35,8 +35,13 @@ pub fn main() anyerror!void {
     const State = struct {
         board: othello.Board,
         nextcol: othello.Color,
+        last_move: ?othello.Coord,
     };
-    const init_state: State = .{ .board = othello.init_board, .nextcol = .black };
+    const init_state: State = .{
+        .board = othello.init_board,
+        .nextcol = .black,
+        .last_move = null,
+    };
 
     var history = std.ArrayList(State).init(gpa.allocator());
     defer history.deinit();
@@ -82,6 +87,7 @@ pub fn main() anyerror!void {
             if (!othello.isValidPlay(game_state.board, sq, game_state.nextcol)) break :play;
             game_state.board = othello.playAt(game_state.board, sq, game_state.nextcol);
             game_state.nextcol = game_state.nextcol.next();
+            game_state.last_move = sq;
             helper_state.dirty = true;
 
             if (!game_over) {
@@ -103,7 +109,7 @@ pub fn main() anyerror!void {
         defer rl.endDrawing();
 
         rl.clearBackground(rl.Color.init(0, 33, 66, 255));
-        drawBoard(game_state.board, gui_board_pos, gui_board_size);
+        drawBoard(game_state.board, gui_board_pos, game_state.last_move, gui_board_size);
         if (showhelpers)
             drawHelper(&helper_state, gui_board_pos, gui_board_size);
 
@@ -167,7 +173,8 @@ pub fn main() anyerror!void {
 fn addmul(p: Vec2, k: f32, d: Vec2) Vec2 {
     return Vec2.add(p, Vec2.multiply(d, .{ .x = k, .y = k }));
 }
-fn drawBoard(b: othello.Board, pos: Vec2, size: f32) void {
+
+fn drawBoard(b: othello.Board, pos: Vec2, last_move: ?othello.Coord, size: f32) void {
     const rect: rl.Rectangle = .{ .x = pos.x, .y = pos.y, .width = size, .height = size };
     rl.drawRectangleRounded(rect, 0.1, 7, rl.Color.dark_green);
 
@@ -197,7 +204,16 @@ fn drawBoard(b: othello.Board, pos: Vec2, size: f32) void {
 
         for (0..8) |y| {
             for (0..8) |x| {
-                drawPawn(addmul(pos0, size / 8, .{ .x = @floatFromInt(x), .y = @floatFromInt(y) }), size / 20, b.get(x, y));
+                const square_pos = addmul(pos0, size / 8, .{ .x = @floatFromInt(x), .y = @floatFromInt(y) });
+
+                if (last_move) |lm| {
+                    if (lm[0] == x and lm[1] == y) {
+                        const highlight_size = size / 8;
+                        rl.drawRectangle(@intFromFloat(square_pos.x - highlight_size / 2), @intFromFloat(square_pos.y - highlight_size / 2), @intFromFloat(highlight_size), @intFromFloat(highlight_size), rl.Color{ .r = 0, .g = 0, .b = 255, .a = 100 });
+                    }
+                }
+
+                drawPawn(square_pos, size / 20, b.get(x, y));
             }
         }
     }
