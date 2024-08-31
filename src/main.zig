@@ -44,16 +44,15 @@ pub fn main() anyerror!void {
     var game_state = init_state;
     try history.append(game_state);
 
-    var helper_state: HelperState = undefined;
-    updateHelper(game_state.board, game_state.nextcol, 1, &helper_state);
+    var helper_state: HelperState = .{};
 
     // ui state
     const gui_board_pos: Vec2 = .{ .x = 20, .y = 20 };
     const gui_board_size: f32 = 640;
     var game_over = false;
     var showhelpers = true;
-    var helper_lookahead: f32 = 1;
-    var ai_engine = [_]othello.Engine{ undefined, .greedy, .none };
+    var helper_lookahead: f32 = 0;
+    var ai_engine = [_]othello.Engine{ undefined, .none, .none };
     var gui_dropdowns_states = [_]bool{ false, false };
 
     // Main game loop
@@ -83,6 +82,7 @@ pub fn main() anyerror!void {
             if (!othello.isValidPlay(game_state.board, sq, game_state.nextcol)) break :play;
             game_state.board = othello.playAt(game_state.board, sq, game_state.nextcol);
             game_state.nextcol = game_state.nextcol.next();
+            helper_state.dirty = true;
 
             if (!game_over) {
                 const can_play = othello.computeValidSquares(game_state.board, game_state.nextcol) != 0;
@@ -93,10 +93,9 @@ pub fn main() anyerror!void {
                 }
             }
 
-            updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
-
             try history.append(game_state);
         }
+        updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
 
         // Draw
         //----------------------------------------------------------------------------------
@@ -121,21 +120,24 @@ pub fn main() anyerror!void {
                 history.items.len -= 2;
                 game_state = history.getLast();
                 game_over = false;
-                updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
+                helper_state.dirty = true;
             }
         }
         if (gui.guiButton(.{ .x = 820, .y = 150, .width = 100, .height = 20 }, "Restart") != 0) {
             game_over = false;
             game_state = init_state;
-            updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
+            helper_state.dirty = true;
 
             history.clearRetainingCapacity();
             try history.append(game_state);
         }
 
+        const boardhextxt = try std.fmt.allocPrintZ(frame_alloc, "Board: {X:0>16} - {X:0>16}", .{ game_state.board.black, game_state.board.white });
+        rl.drawText(boardhextxt, 100, 675, 20, rl.Color.gray);
+
         _ = gui.guiCheckBox(.{ .x = 700, .y = 450, .width = 20, .height = 20 }, "show helpers", &showhelpers);
-        if (gui.guiSlider(.{ .x = 700, .y = 480, .width = 200, .height = 20 }, "none", "max", &helper_lookahead, 1, 10) != 0) {
-            updateHelper(game_state.board, game_state.nextcol, @intFromFloat(helper_lookahead), &helper_state);
+        if (gui.guiSlider(.{ .x = 700, .y = 480, .width = 200, .height = 20 }, "none", "max", &helper_lookahead, 0, 10) != 0) {
+            helper_state.dirty = true;
         }
 
         rl.drawText("Black AI: ", 700, 525, 10, rl.Color.light_gray);
@@ -215,19 +217,23 @@ fn drawPawn(pos: Vec2, radius: f32, col: othello.Color) void {
 }
 
 const HelperState = struct {
-    valids: u64,
-    heuristic: [64]i32,
-    lookahead: [64]i32,
+    dirty: bool = true,
+    valids: u64 = undefined,
+    heuristic: [64]i32 = undefined,
+    lookahead: [64]i32 = undefined,
 };
 fn updateHelper(b: othello.Board, nextcol: othello.Color, lookahead: u32, helper_state: *HelperState) void {
+    if (!helper_state.dirty) return;
     helper_state.valids = othello.computeValidSquares(b, nextcol);
     helper_state.heuristic = othello.computeEval(b, nextcol, 0);
-    helper_state.lookahead = othello.computeEval(b, nextcol, @max(1, @min(10, lookahead)));
+    helper_state.lookahead = othello.computeEval(b, nextcol, @max(0, @min(10, lookahead)));
+    helper_state.dirty = false;
 }
 
 fn drawHelper(helper_state: *const HelperState, pos: Vec2, size: f32) void {
     const pos0 = Vec2.add(pos, .{ .x = size / 16, .y = size / 16 });
 
+    assert(!helper_state.dirty);
     const valids = helper_state.valids;
     for (0..8) |y| {
         for (0..8) |x| {
@@ -240,12 +246,12 @@ fn drawHelper(helper_state: *const HelperState, pos: Vec2, size: f32) void {
         for (0..8) |x| {
             if (valids & othello.bitmask(x, y) == 0) continue;
 
-            const p = addmul(pos0, size / 8, .{ .x = @as(f32, @floatFromInt(x)) - 0.45, .y = @floatFromInt(y) });
-            const ev0 = helper_state.heuristic[x + y * 8];
-            const ev1 = helper_state.lookahead[x + y * 8];
+            const p = addmul(pos0, size / 8, .{ .x = @as(f32, @floatFromInt(x)) - 0.2, .y = @as(f32, @floatFromInt(y)) - 0.1 });
+            //const ev0 = helper_state.heuristic[x + y * 8];
+            const ev = helper_state.lookahead[x + y * 8];
             var buf: [16]u8 = undefined;
-            const txt = std.fmt.bufPrintZ(&buf, "{}/{}", .{ ev0, ev1 }) catch "ERR";
-            rl.drawText(txt, @intFromFloat(p.x), @intFromFloat(p.y), 16, if (ev0 > 0) rl.Color.yellow else rl.Color.red);
+            const txt = std.fmt.bufPrintZ(&buf, "{}", .{ev}) catch "ERR";
+            rl.drawText(txt, @intFromFloat(p.x), @intFromFloat(p.y), 16, if (ev >= 0) rl.Color.yellow else rl.Color.red);
         }
     }
 }
@@ -311,7 +317,7 @@ test "fuzz" {
             input_idx += 1;
             break :pos .{ @intCast(byte % 8), @intCast((byte / 8) % 8) };
         };
-        if (!othello.isValidPlay(board, pos, nextcol)) break;
+        if (!othello.isValidPlay(board, pos, nextcol)) continue;
         board = othello.playAt(board, pos, nextcol);
         nextcol = nextcol.next();
 
@@ -322,6 +328,4 @@ test "fuzz" {
                 game_over = true;
         }
     }
-
-    //try std.testing.expect(!game_over);
 }

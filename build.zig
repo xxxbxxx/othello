@@ -5,8 +5,8 @@ pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const use_llvm : ?bool = if (optimize != .Debug or target.query.os_tag == .windows) true else null;	// or fuzz?
-	
+    const use_llvm: ?bool = if (optimize != .Debug or target.query.os_tag == .windows) true else null; // or fuzz?
+
     const raylib_dep = b.dependency("raylib-zig", .{
         .target = target,
         .optimize = .ReleaseFast,
