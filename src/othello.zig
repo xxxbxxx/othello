@@ -335,7 +335,9 @@ fn computeStepBestMove(b: Board, col: Color, skipped: bool, random: ?std.Random,
             best_eval = eval;
         }
         alpha1 = @max(eval, alpha1);
-        if (prune and alpha1 >= beta) {
+        if (prune and alpha1 > beta) {
+            // piège: alpha1 >= beta "marche" aussi, *mais* va renvoyer potentiellement une valeur égale à une évaluation précédente (alors que la vraie évaluation non-élaguée aurait été strictment pire)
+            //        et comme en cas d'églité on va tirer au hasard, on va potentiellement choisir ce choix strictement moins bon mais qu'on a élagué dès l'égalité rencontrée...
             break;
         }
     }
