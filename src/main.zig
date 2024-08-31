@@ -298,9 +298,9 @@ test "greedy" {
 }
 
 test "multi steps" {
-    const score = playGame(4321, std.testing.allocator, .five_steps);
-    try std.testing.expectEqual(@as(u32, 60), score.whites);
-    try std.testing.expectEqual(@as(u32, 4), score.blacks);
+    const score = playGame(4321, std.testing.allocator, .large_lookahead);
+    try std.testing.expectEqual(@as(u32, 48), score.whites);
+    try std.testing.expectEqual(@as(u32, 16), score.blacks);
 }
 
 test "fuzz" {
