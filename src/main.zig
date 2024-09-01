@@ -7,11 +7,30 @@ const assert = std.debug.assert;
 
 const Vec2 = rl.Vector2;
 
-pub fn main() anyerror!void {
+pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
         std.testing.expect(gpa.deinit() == .ok) catch unreachable;
     }
+
+    var args = try std.process.argsWithAllocator(gpa.allocator());
+    defer args.deinit();
+
+    // Ignorer le nom du programme
+    _ = args.next();
+
+    if (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "tournament")) {
+            const num_games = if (args.next()) |games_str|
+                try std.fmt.parseInt(usize, games_str, 10)
+            else
+                10; // Nombre de jeux par défaut
+            try runTournament(gpa.allocator(), num_games);
+            return;
+        }
+    }
+
+    // partie interractive:
 
     var frame_arena = std.heap.ArenaAllocator.init(gpa.allocator());
     defer frame_arena.deinit();
@@ -272,7 +291,77 @@ fn drawHelper(helper_state: *const HelperState, pos: Vec2, size: f32) void {
     }
 }
 
-// tests
+// ================================================================
+// comparatifs ia
+// ================================================================
+
+fn runTournament(allocator: std.mem.Allocator, num_games: usize) !void {
+    const engines = [_]othello.Engine{ .random, .greedy, .small_lookahead, .large_lookahead, .mcts };
+    var scores = try allocator.alloc(usize, engines.len);
+    defer allocator.free(scores);
+    @memset(scores, 0);
+
+    var prng = std.Random.DefaultPrng.init(blk: {
+        var seed: u64 = undefined;
+        try std.posix.getrandom(std.mem.asBytes(&seed));
+        break :blk seed;
+    });
+    const random = prng.random();
+
+    for (engines, 0..) |engine1, i| {
+        for (engines[i + 1 ..], i + 1..) |engine2, j| {
+            std.debug.print("Playing {s} vs {s}...\n", .{ @tagName(engine1), @tagName(engine2) });
+            for (0..num_games) |_| {
+                const result = try playTournamentGame(engine1, engine2, allocator, random);
+                scores[i] += result[0];
+                scores[j] += result[1];
+            }
+        }
+    }
+
+    // Afficher les résultats
+    std.debug.print("\nTournament Results:\n", .{});
+    for (engines, 0..) |engine, i| {
+        std.debug.print("{s}: {d} points\n", .{ @tagName(engine), scores[i] });
+    }
+}
+
+fn playTournamentGame(engine1: othello.Engine, engine2: othello.Engine, allocator: std.mem.Allocator, random: std.Random) ![2]usize {
+    var board = othello.init_board;
+    var current_color = othello.Color.black;
+    const engine1_side: othello.Color = if (random.boolean()) .white else .black;
+
+    var game_over = false;
+    while (!game_over) {
+        const pos = othello.computeBestMove(
+            if (engine1_side == current_color) engine1 else engine2,
+            board,
+            current_color,
+            allocator,
+            random,
+        );
+        board = othello.playAt(board, pos, current_color);
+        current_color = current_color.next();
+
+        const can_play = othello.computeValidSquares(board, current_color) != 0;
+        if (!can_play) {
+            current_color = current_color.next();
+            if (othello.computeValidSquares(board, current_color) == 0)
+                game_over = true;
+        }
+    }
+
+    const score = othello.computeScore(board);
+    if (score.blacks == score.whites)
+        return [2]usize{ 0, 0 };
+    if (engine1_side == .white)
+        return if (score.whites > score.blacks) [2]usize{ 1, 0 } else [2]usize{ 0, 1 };
+    return if (score.whites > score.blacks) [2]usize{ 0, 1 } else [2]usize{ 1, 0 };
+}
+
+// ================================================================
+// Tests
+// ================================================================
 
 fn playGame(seed: u32, alloc: std.mem.Allocator, engine: othello.Engine) othello.Score {
     var prng = std.Random.DefaultPrng.init(seed);
